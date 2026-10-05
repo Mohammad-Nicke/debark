@@ -234,7 +234,9 @@ class SandboxWrapperTests(unittest.TestCase):
             executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             wrapper = root / "bin/demo"
 
-            engine.make_wrapper(wrapper, app_root, executable, object(), payload, sandbox=True)
+            engine.make_wrapper(
+                wrapper, app_root, executable, object(), payload, sandbox=True,
+            )
             content = wrapper.read_text(encoding="utf-8")
 
         self.assertIn('firejail --net=none --read-only="$HOME"', content)
