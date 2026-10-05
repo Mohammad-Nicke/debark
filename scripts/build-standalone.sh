@@ -17,11 +17,11 @@ mkdir -p "$OUTPUT_DIR"
 PYTHONPATH="$PROJECT_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m nuitka \
     --mode=standalone \
     --output-dir="$OUTPUT_DIR" \
-    --output-filename=debark \
+    --output-filename=debark-cli \
     --include-package=debark \
-    --include-package-data=debark \
     --include-data-dir="$PROJECT_ROOT/src/debark/data=debark/data" \
     "$PROJECT_ROOT/scripts/standalone_entry.py"
 
 printf '\nStandalone output: %s/debark.dist\n' "$OUTPUT_DIR"
+printf 'Executable: %s/debark.dist/debark-cli\n' "$OUTPUT_DIR"
 printf 'This is a directory distribution. It is not a onefile binary.\n'
