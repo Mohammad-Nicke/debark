@@ -4,7 +4,7 @@
 
 **Run Debian apps on Arch Linux, without spreading their files across the system.**
 
-[![Source version](https://img.shields.io/badge/source-0.1.1-blue)](CHANGELOG.md)
+[![Source version](https://img.shields.io/badge/source-0.1.2-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Source--Available-orange)](LICENSE)
 [![CI](https://github.com/Mohammad-Nicke/debark/actions/workflows/ci.yml/badge.svg)](https://github.com/Mohammad-Nicke/debark/actions/workflows/ci.yml)
 
