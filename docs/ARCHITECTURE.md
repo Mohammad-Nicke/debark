@@ -4,9 +4,13 @@
 
 The installer always downloads the current project source archive from GitHub, then reads `dependencies/required-arch.txt`. It first asks pacman to install missing packages from the machine's configured repositories, using `sudo` or `doas` when needed. If that transaction fails, it can download the current x86_64 package bundle from the existing `0.1` GitHub Release. The weekly bundle contains the full dependency closure resolved from Arch's sync database, plus upstream signatures and checksums, and is rejected after 14 days. Pacman remains responsible for signature checks, dependency validation and the package transaction. The installer refuses to install a bundled package over an older installed version, which avoids partial system upgrades.
 
+When a DebArk installation already exists in the selected mode, the installer stages the new Python package and entry point and replaces those program files. The existing configuration and data directories are not removed: repository definitions, package records, snapshots, and DebArk's own caches remain in place. The detected existing mode becomes the interactive default. A self-update passes the current mode directly to the installer and preserves existing preferences.
+
 The package archive is published as a GitHub Release asset rather than stored in the Git source tree. Its existing asset is refreshed weekly without creating a version or tag. The installer downloads this bundle from GitHub when needed; it does not accept a locally supplied bundle, so installation requires an internet connection.
 
 The required packages are Python and GNU binutils. Python runs DebArk, and binutils provides `ar` for reading Debian packages. Tools for optional features, such as signature checking or sandbox launchers, are not required for a normal install.
+
+`debark update` refreshes the local dependency map and pacman's file-provider database, then checks the installed version against `src/debark/__init__.py` on the project's `main` branch. `debark upgrade` checks app versions in previously synced beta indexes, then performs the same DebArk version check. A newer DebArk version is shown with its matching changelog section and requires an interactive confirmation before the installer is downloaded and run. The installer stays in the current system or user mode; it does not replace Debian apps.
 
 ## Runtime layout
 

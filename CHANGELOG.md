@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — 2026-10-05
+
+- Check for DebArk updates from both `update` and `upgrade`; stay quiet when the installed version is current.
+- Show the available version's changelog notes and ask before updating DebArk itself.
+- Replace an existing DebArk installation in place, keeping preferences, Debian repository definitions, package records, snapshots and DebArk's own caches.
+- Keep the detected installation mode during a self-update and request administrator access through the existing trusted system command when needed.
+- Use a clearer terminal progress bar for package downloads and payload copies.
+- Retain copyright notices under the MIT License.
+
 ## 0.1 — 2026-10-05
 
 - Install Debian packages in separate application directories on Arch Linux without running package maintainer scripts.
