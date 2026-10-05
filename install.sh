@@ -32,6 +32,11 @@ else
     exec 3</dev/null
 fi
 
+PACMAN_CONFIRM_ARGS=()
+if [ ! -t 3 ]; then
+    PACMAN_CONFIRM_ARGS+=(--noconfirm)
+fi
+
 ask_value() {
     local prompt="$1"
     local default="$2"
@@ -66,12 +71,26 @@ run_as_admin() {
     if [ "$EUID" -eq 0 ]; then
         "$@"
     elif command -v sudo >/dev/null 2>&1; then
-        sudo "$@"
+        if [ -t 3 ]; then sudo "$@"; else sudo -n "$@"; fi
     elif command -v doas >/dev/null 2>&1; then
-        doas "$@"
+        if [ -t 3 ]; then doas "$@"; else doas -n "$@"; fi
     else
         die "Installing required Arch packages needs root, sudo, or doas."
     fi
+}
+
+ensure_noninteractive_admin() {
+    [ "$EUID" -eq 0 ] && return 0
+    [ -t 3 ] && return 0
+
+    if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v doas >/dev/null 2>&1 && doas -n true >/dev/null 2>&1; then
+        return 0
+    fi
+
+    die "Installing Arch dependencies without a terminal needs root or passwordless sudo/doas. Rerun in a terminal or as root."
 }
 
 command -v pacman >/dev/null 2>&1 || die "DebArk requires Arch Linux and pacman."
@@ -122,8 +141,9 @@ install_required_dependencies() {
 
     [ "${#missing[@]}" -eq 0 ] && return 0
 
+    ensure_noninteractive_admin
     printf 'Installing required packages through pacman: %s\n' "${missing[*]}"
-    if run_as_admin pacman -S --needed "${missing[@]}"; then
+    if run_as_admin pacman -S --needed "${PACMAN_CONFIRM_ARGS[@]}" "${missing[@]}"; then
         missing=()
         for package in "${required[@]}"; do
             if ! pacman -Qq "$package" >/dev/null 2>&1; then
@@ -248,8 +268,12 @@ install_dependencies_from_bundle() {
     done
 
     if [ "${#install_files[@]}" -gt 0 ]; then
-        printf 'Installing the signed Arch packages from the DebArk bundle. Pacman will show its normal confirmation prompt.\n'
-        run_as_admin pacman -U --needed "${install_files[@]}" ||
+        if [ -t 3 ]; then
+            printf 'Installing the signed Arch packages from the DebArk bundle. Pacman will show its normal confirmation prompt.\n'
+        else
+            printf 'Installing the signed Arch packages from the DebArk bundle without an interactive prompt.\n'
+        fi
+        run_as_admin pacman -U --needed "${PACMAN_CONFIRM_ARGS[@]}" "${install_files[@]}" ||
             die "Pacman rejected the dependency bundle. Check the Arch keyring and system package state, then use a current Arch repository."
     fi
 

@@ -32,11 +32,11 @@ DebArk is a local helper for running Debian apps on Arch. This page is a quick g
 | Offline ranker under 20 MiB | Implemented; hint-only, never autoruns pacman |
 | Isolated per-package payload | Implemented |
 | Private library paths in generated wrappers | Implemented for bundled library directories |
-| Firejail/bubblewrap launcher | Optional integration; the runtime must already be installed |
+| Firejail/bubblewrap launcher | Optional integration; requests network isolation, read-only home access, and private temporary/device views; the runtime must already be installed |
 | Automatic library copying, seccomp profiles, cgroups, AppArmor generation | Deferred |
 | Pre-flight pacman dependency transaction | Partial: dependency ownership and availability are checked; pacman performs its own transaction |
 
-The sandbox option adds a launcher that uses an already-installed Firejail or bubblewrap. A sandbox is an extra layer that can limit what an app sees or changes when it runs. DebArk's current setup is optional and should not be treated as a strong boundary around an untrusted app.
+The sandbox option adds a launcher that uses an already-installed Firejail or bubblewrap. It requests network isolation, read-only access to the home directory, and private temporary and device views. It remains optional because some apps need network access or writable settings. The runtime and kernel must support the requested restrictions; this should not be treated as a dependable security boundary around hostile software.
 
 ## Local operations and integration
 
@@ -68,7 +68,7 @@ Remote registries, community mappings, reputation systems, hosted dashboards, cl
 | Capability | Status |
 |---|---|
 | Unit and focused archive-security tests | Implemented with synthetic local fixtures |
-| GitHub Actions on pushes and pull requests | Implemented for Python 3.10–3.13 |
+| GitHub Actions on pushes and pull requests | Implemented for Python 3.10–3.13; GitHub Action dependencies are checked weekly by Dependabot |
 | Current Arch rolling compatibility check | Scheduled weekly and available by manual workflow dispatch |
 | Coverage report | Uploaded as a workflow artifact; no hosted coverage badge is configured |
 | Dependency-map contribution guidance | Documented in `CONTRIBUTING.md` |

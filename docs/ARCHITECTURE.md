@@ -42,7 +42,7 @@ Each package record includes source metadata, source SHA256, installation mode, 
 - Removal checks recorded hashes and containment before unlinking. User-modified content is kept.
 - Rollback checks the snapshot and manifest hashes before swapping the app directory. Untracked current files block rollback.
 - Package scripts are data only and are never executed by DebArk.
-- Sandbox support is an optional launcher integration with Firejail or bubblewrap. Its current policy is not a reliable security boundary for hostile applications; sandbox behavior depends on the installed runtime and its policy.
+- Sandbox support is an optional launcher integration with Firejail or bubblewrap. It requests network isolation, read-only home access, and private temporary/device views. It is not enabled by default, and behavior depends on the installed runtime and kernel; do not treat it as a reliable security boundary for hostile applications.
 
 ## Deferred interfaces
 

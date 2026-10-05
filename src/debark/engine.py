@@ -1374,9 +1374,9 @@ def make_wrapper(path: Path, app_root: Path, executable: Path, cfg: Config,
     if sandbox:
         command += [
             "if command -v firejail >/dev/null 2>&1; then",
-            f"  exec firejail --private-tmp --private-dev -- {executable_path} \"$@\"",
+            f"  exec firejail --net=none --read-only=\"$HOME\" --private-tmp --private-dev -- {executable_path} \"$@\"",
             "elif command -v bwrap >/dev/null 2>&1; then",
-            f"  exec bwrap --die-with-parent --unshare-all --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --bind \"$HOME\" \"$HOME\" --setenv HOME \"$HOME\" -- {executable_path} \"$@\"",
+            f"  exec bwrap --die-with-parent --unshare-all --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --ro-bind \"$HOME\" \"$HOME\" --setenv HOME \"$HOME\" -- {executable_path} \"$@\"",
             "else",
             "  printf '%s\\n' 'DebArk: firejail or bubblewrap is required for this launcher.' >&2",
             "  exit 127",
