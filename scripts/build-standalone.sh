@@ -22,6 +22,6 @@ PYTHONPATH="$PROJECT_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m nuitka \
     --include-data-dir="$PROJECT_ROOT/src/debark/data=debark/data" \
     "$PROJECT_ROOT/scripts/standalone_entry.py"
 
-printf '\nStandalone output: %s/debark.dist\n' "$OUTPUT_DIR"
-printf 'Executable: %s/debark.dist/debark-cli\n' "$OUTPUT_DIR"
+printf '\nStandalone output: %s/standalone_entry.dist\n' "$OUTPUT_DIR"
+printf 'Executable: %s/standalone_entry.dist/debark-cli\n' "$OUTPUT_DIR"
 printf 'This is a directory distribution. It is not a onefile binary.\n'
