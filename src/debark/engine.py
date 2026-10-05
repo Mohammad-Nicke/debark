@@ -2421,7 +2421,7 @@ def _install_upstream_debark(cfg: Config) -> None:
         info("DebArk update skipped.")
         return
 
-    installer_url = f"https://raw.githubusercontent.com/Mohammad-Nicke/debark/main/install.sh"
+    installer_url = "https://raw.githubusercontent.com/Mohammad-Nicke/debark/main/install.sh"
     try:
         installer_text = _read_upstream_file(installer_url, limit=256 * 1024)
         if "DEBARK_SELF_UPDATE" not in installer_text or "Mohammad-Nicke/debark" not in installer_text:
