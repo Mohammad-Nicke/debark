@@ -6,6 +6,13 @@
 from __future__ import annotations
 
 import sys
+
+# Python prepends the command's directory to sys.path. Remove it before
+# importing the standard library so unrelated scripts beside this launcher
+# cannot shadow modules such as ``token``.
+if sys.path:
+    sys.path.pop(0)
+
 from pathlib import Path
 
 

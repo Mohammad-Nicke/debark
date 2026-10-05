@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2 — 2026-10-05
+
+- Prevent unrelated files beside the `debark` command from shadowing Python standard-library modules during startup.
+
 ## 0.1.1 — 2026-10-05
 
 - Check for DebArk updates from both `update` and `upgrade`; stay quiet when the installed version is current.
