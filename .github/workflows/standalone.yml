@@ -31,7 +31,10 @@ jobs:
             --env GITHUB_SHA \
             --env DEBARK_VERSION="$version" \
             archlinux:latest \
-            bash -lc 'pacman -Syu --noconfirm --needed python nuitka base-devel patchelf && \
+            bash -lc 'pacman -Syu --noconfirm --needed python python-pip base-devel patchelf openssl && \
+              python3 -m venv /opt/debark-build-venv && \
+              /opt/debark-build-venv/bin/python3 -m pip install --disable-pip-version-check --no-cache-dir Nuitka && \
+              export PATH="/opt/debark-build-venv/bin:$PATH" && \
               ./scripts/build-standalone.sh /workspace/dist/nuitka && \
               cp src/debark/data/debark-release-public.pem /workspace/dist/nuitka/debark.dist/debark-release-public.pem && \
               python3 scripts/create-release-manifest.py \
