@@ -2,9 +2,9 @@
 
 ## Installer and system packages
 
-The installer always downloads the current project source archive from GitHub, then reads `dependencies/required-arch.txt`. It first asks pacman to install missing packages from the machine's configured repositories, using `sudo` or `doas` when needed. If that transaction fails, it can download the current x86_64 package bundle from the repository's rolling GitHub Release. The weekly bundle contains the full dependency closure resolved from Arch's sync database, plus upstream signatures and checksums, and is rejected after 14 days. Pacman remains responsible for signature checks, dependency validation and the package transaction. The installer refuses to install a bundled package over an older installed version, which avoids partial system upgrades.
+The installer always downloads the current project source archive from GitHub, then reads `dependencies/required-arch.txt`. It first asks pacman to install missing packages from the machine's configured repositories, using `sudo` or `doas` when needed. If that transaction fails, it can download the current x86_64 package bundle from the existing `0.1` GitHub Release. The weekly bundle contains the full dependency closure resolved from Arch's sync database, plus upstream signatures and checksums, and is rejected after 14 days. Pacman remains responsible for signature checks, dependency validation and the package transaction. The installer refuses to install a bundled package over an older installed version, which avoids partial system upgrades.
 
-The rolling package archives are published as a GitHub Release asset rather than stored in the Git source tree. The installer downloads this bundle from GitHub when needed; it does not accept a locally supplied bundle, so installation requires an internet connection.
+The package archive is published as a GitHub Release asset rather than stored in the Git source tree. Its existing asset is refreshed weekly without creating a version or tag. The installer downloads this bundle from GitHub when needed; it does not accept a locally supplied bundle, so installation requires an internet connection.
 
 The required packages are Python and GNU binutils. Python runs DebArk, and binutils provides `ar` for reading Debian packages. Tools for optional features, such as signature checking or sandbox launchers, are not required for a normal install.
 
@@ -42,8 +42,9 @@ Each package record includes source metadata, source SHA256, installation mode, 
 - Removal checks recorded hashes and containment before unlinking. User-modified content is kept.
 - Rollback checks the snapshot and manifest hashes before swapping the app directory. Untracked current files block rollback.
 - Package scripts are data only and are never executed by DebArk.
-- Sandbox support is an optional launcher integration with Firejail or bubblewrap. It requests network isolation, read-only home access, and private temporary/device views. It is not enabled by default, and behavior depends on the installed runtime and kernel; do not treat it as a reliable security boundary for hostile applications.
+- Sandbox support is an optional launcher integration with Firejail or bubblewrap. It disables networking, uses a temporary home and private temporary/device views, and exposes the system filesystem read-only. It is not enabled by default, may break apps that need networking or persistent settings, and is not a reliable security boundary for hostile applications.
+- Experimental APT sync verifies signed Release metadata with a caller-selected keyring before accepting index checksums. Experimental package downloads are checked against the signed index before DebArk extracts them. The beta path does not yet update an already-installed package transactionally.
 
 ## Deferred interfaces
 
-Repository definitions are local metadata only. Remote Debian index sync must verify signed Release metadata before package candidates can be trusted. Hosted registries, remote build services, cloud sync, web APIs, binary caches, P2P, and community-maintained mappings are deferred.
+APT repository definitions are saved locally. The opt-in beta sync verifies signed Release metadata before accepting package candidates. Hosted registries, remote build services, cloud sync, web APIs, binary caches, P2P, and community-maintained mappings are deferred.

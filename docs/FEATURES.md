@@ -32,11 +32,11 @@ DebArk is a local helper for running Debian apps on Arch. This page is a quick g
 | Offline ranker under 20 MiB | Implemented; hint-only, never autoruns pacman |
 | Isolated per-package payload | Implemented |
 | Private library paths in generated wrappers | Implemented for bundled library directories |
-| Firejail/bubblewrap launcher | Optional integration; requests network isolation, read-only home access, and private temporary/device views; the runtime must already be installed |
+| Firejail/bubblewrap launcher | Optional integration; disables network, uses a temporary home, private temporary/device views, hides common session sockets and makes the system filesystem read-only; runtime must already be installed |
 | Automatic library copying, seccomp profiles, cgroups, AppArmor generation | Deferred |
 | Pre-flight pacman dependency transaction | Partial: dependency ownership and availability are checked; pacman performs its own transaction |
 
-The sandbox option adds a launcher that uses an already-installed Firejail or bubblewrap. It requests network isolation, read-only access to the home directory, and private temporary and device views. It remains optional because some apps need network access or writable settings. The runtime and kernel must support the requested restrictions; this should not be treated as a dependable security boundary around hostile software.
+The sandbox option adds a launcher that uses an already-installed bubblewrap or Firejail. It requests network isolation, a temporary empty home, private temporary files and devices, and read-only access to the system filesystem. It also hides common session sockets. It remains optional because some apps need network access, writable settings, a display server or session services. The runtime and kernel must support the requested restrictions; this should not be treated as a dependable security boundary around hostile software.
 
 ## Local operations and integration
 
@@ -51,23 +51,23 @@ The sandbox option adds a launcher that uses an already-installed Firejail or bu
 | Shell completions and man page | Bash, Zsh, Fish and `debark(1)` included |
 | Audit log, statistics, marker scan, garbage collection | Implemented |
 | License inventory | Best effort from package control metadata and documentation |
-| CVE scan | Deferred; no vulnerability feed is bundled or fetched |
-| Debian source definition management | Local metadata only |
-| Signed APT index sync and repo installation | Disabled pending authenticated Release verification |
+| CVE scan | Experimental opt-in; compares installed Debian versions to Debian Security Tracker data for a selected suite |
+| Debian source definition management | Saved locally; HTTPS only for experimental sync |
+| Signed APT index sync and new-package install | Experimental opt-in; detached Release signature, signed SHA256/size checks, and x86_64/amd64 only |
 | Desktop entries and launch wrappers | Implemented; existing destinations are not replaced |
 | MIME, DBus, systemd, udev, cron and Polkit registration | Deferred |
 
-`update` refreshes Arch file-provider data used by dependency checks. It does not update installed Debian apps. The `upgrade` command currently reports saved sources and version pins; automatic app upgrades are not available yet.
+`update` refreshes Arch file-provider data used by dependency checks. `upgrade` can detect newer versions from experimental indexes, but it does not replace installed apps. All APT and CVE features are opt-in beta and may fail.
 
 ## Hosted and community capabilities
 
-Remote registries, community mappings, reputation systems, hosted dashboards, cloud synchronization, remote binary caches, P2P, auto-update services, GUI shells, and cross-distro package conversion are deferred. The dependency ranker is a small local rules-and-weights model; it performs no network requests and is not an AI service.
+Remote registries, community mappings, reputation systems, hosted dashboards, cloud synchronization, remote binary caches, P2P, auto-update services, GUI shells, and cross-distro package conversion are deferred. The dependency ranker is a small local rules-and-weights helper; it performs no network requests.
 
 ## Project quality
 
 | Capability | Status |
 |---|---|
-| Unit and focused archive-security tests | Implemented with synthetic local fixtures |
+| Unit and focused archive-security tests | Implemented with synthetic fixtures plus a real `.deb` container install/remove lifecycle in temporary user paths |
 | GitHub Actions on pushes and pull requests | Implemented for Python 3.10–3.13; GitHub Action dependencies are checked weekly by Dependabot |
 | Current Arch rolling compatibility check | Scheduled weekly and available by manual workflow dispatch |
 | Coverage report | Uploaded as a workflow artifact; no hosted coverage badge is configured |

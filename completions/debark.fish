@@ -1,6 +1,6 @@
-# DebArk Fish completion · Master Nick (@Mohammad-Nicke)
+# DebArk Fish completion · Mr.Nick (@Mohammad-Nicke)
 # https://github.com/Mohammad-Nicke/debark
-set -l commands install remove list search info files verify scan update upgrade config doctor repo repair gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about
+set -l commands install remove list search info files verify scan update upgrade config doctor repo cve repair gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about
 complete -c debark -f -n '__fish_use_subcommand' -a "$commands"
 complete -c debark -s u -l user -d 'Use per-user paths'
 complete -c debark -s y -l yes -d 'Skip confirmation prompts'

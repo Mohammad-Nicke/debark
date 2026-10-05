@@ -32,6 +32,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import __license__, __maintainer__, __url__, __version__
+from . import experimental
 from .plugins import enabled_plugins, run_hook, set_plugin_enabled
 from .resolver import rank_candidates
 
@@ -47,7 +48,7 @@ COMMAND_NAME = re.compile(r"^[A-Za-z0-9_.+-]+$")
 DB_SCHEMA_VERSION = 3
 SYSTEM_ACCESS_COMMANDS = frozenset({
     "install", "remove", "list", "search", "files", "verify", "scan", "update",
-    "upgrade", "repo", "config", "repair", "gc", "log", "stats", "snapshot",
+    "upgrade", "repo", "cve", "config", "repair", "gc", "log", "stats", "snapshot",
     "rollback", "export", "import", "bulk", "watch", "profile", "plugin", "pin",
     "license",
 })
@@ -191,6 +192,7 @@ class Config:
         self.set_paths()
         self.auto_yes = False
         self.colors = True
+        self.experimental_features = False
         self.threads = 4
         self._load()
 
@@ -233,8 +235,20 @@ class Config:
             values = json.loads(read_regular_text(self.cfg_file))
         except (DebArkError, OSError, ValueError):
             return
-        self.auto_yes = bool(values.get("auto_yes", self.auto_yes))
-        self.colors = bool(values.get("colors", self.colors))
+        if not isinstance(values, dict):
+            return
+
+        def config_bool(key: str, default: bool) -> bool:
+            value = values.get(key, default)
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str) and value.casefold() in {"true", "false"}:
+                return value.casefold() == "true"
+            return default
+
+        self.auto_yes = config_bool("auto_yes", self.auto_yes)
+        self.colors = config_bool("colors", self.colors)
+        self.experimental_features = config_bool("experimental_features", self.experimental_features)
         try:
             self.threads = max(1, min(16, int(values.get("threads", self.threads))))
         except (TypeError, ValueError):
@@ -1365,20 +1379,69 @@ def make_wrapper(path: Path, app_root: Path, executable: Path, cfg: Config,
         value = ":".join(str(item) for item in libraries)
         command += [
             f"DEBARK_LIBS={shlex.quote(value)}",
-            'if [ -n "$DEBARK_LIBS" ]; then',
-            '  if [ -n "$LD_LIBRARY_PATH" ]; then DEBARK_LIBS="$DEBARK_LIBS:$LD_LIBRARY_PATH"; fi',
-            '  export LD_LIBRARY_PATH="$DEBARK_LIBS"',
-            "fi",
         ]
+        if not sandbox:
+            command += [
+                'if [ -n "$DEBARK_LIBS" ]; then',
+                '  if [ -n "$LD_LIBRARY_PATH" ]; then DEBARK_LIBS="$DEBARK_LIBS:$LD_LIBRARY_PATH"; fi',
+                '  export LD_LIBRARY_PATH="$DEBARK_LIBS"',
+                "fi",
+            ]
     executable_path = shlex.quote(str(app_root / relative))
     if sandbox:
+        bwrap_command = [
+            "  exec bwrap \\",
+            "    --die-with-parent \\",
+            "    --new-session \\",
+            "    --unshare-all \\",
+            "    --ro-bind / / \\",
+            "    --dev /dev \\",
+            "    --proc /proc \\",
+            "    --tmpfs /tmp \\",
+            "    --tmpfs /home \\",
+            "    --tmpfs /root \\",
+            "    --tmpfs /run/user \\",
+            "    --dir /tmp/debark-home \\",
+            "    --clearenv \\",
+            "    --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/bin:/bin \\",
+            "    --setenv LANG \"${LANG:-C.UTF-8}\" \\",
+            "    --setenv HOME /tmp/debark-home \\",
+            "    --setenv XDG_CONFIG_HOME /tmp/debark-home/.config \\",
+            "    --setenv XDG_CACHE_HOME /tmp/debark-home/.cache \\",
+            "    --setenv XDG_DATA_HOME /tmp/debark-home/.local/share \\",
+            "    --setenv XDG_STATE_HOME /tmp/debark-home/.local/state \\",
+        ]
+        if libraries:
+            bwrap_command.append("    --setenv LD_LIBRARY_PATH \"$DEBARK_LIBS\" \\")
+        bwrap_command.append(f"    -- {executable_path} \"$@\"")
+        firejail_command = [
+            "  exec env -i \\",
+            "    PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/bin \\",
+            "    LANG=\"${LANG:-C.UTF-8}\" \\",
+        ]
+        if libraries:
+            firejail_command.append("    LD_LIBRARY_PATH=\"$DEBARK_LIBS\" \\")
+        firejail_command += [
+            "    firejail \\",
+            "      --net=none \\",
+            "      --private \\",
+            "      --private-tmp \\",
+            "      --private-dev \\",
+            "      --blacklist=/run/user \\",
+            "      --read-only=/ \\",
+            "      --seccomp \\",
+            "      --caps.drop=all \\",
+            "      --nonewprivs \\",
+            f"      -- {executable_path} \"$@\"",
+        ]
         command += [
-            "if command -v firejail >/dev/null 2>&1; then",
-            f"  exec firejail --net=none --read-only=\"$HOME\" --private-tmp --private-dev -- {executable_path} \"$@\"",
-            "elif command -v bwrap >/dev/null 2>&1; then",
-            f"  exec bwrap --die-with-parent --unshare-all --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --ro-bind \"$HOME\" \"$HOME\" --setenv HOME \"$HOME\" -- {executable_path} \"$@\"",
+            "unset DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK GPG_AGENT_INFO XAUTHORITY DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME LD_LIBRARY_PATH",
+            "if command -v bwrap >/dev/null 2>&1; then",
+            *bwrap_command,
+            "elif command -v firejail >/dev/null 2>&1; then",
+            *firejail_command,
             "else",
-            "  printf '%s\\n' 'DebArk: firejail or bubblewrap is required for this launcher.' >&2",
+            "  printf '%s\\n' 'DebArk: bubblewrap or firejail is required for this launcher.' >&2",
             "  exit 127",
             "fi",
         ]
@@ -1576,7 +1639,9 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
             fail("The specified GPG signature or keyring does not exist.")
         _run_checked(["gpgv", "--keyring", str(keyring), str(signature), str(source)],
                      "GPG signature verification failed")
-    if getattr(args, "sandbox", False) and not (shutil.which("firejail") or shutil.which("bwrap")):
+    sandbox_requested = bool(getattr(args, "sandbox", False))
+    sandbox_available = bool(shutil.which("firejail") or shutil.which("bwrap"))
+    if sandbox_requested and not sandbox_available:
         fail("Sandbox launchers require firejail or bubblewrap to be installed.")
 
     prior_db = load_db(cfg)
@@ -1732,7 +1797,7 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
         stage_path = app_stage
         launcher = _write_launchers(executables, main_exec, data_dir, app_stage, final_app,
                                     package, cfg, written, hashes, prior_db,
-                                    sandbox=getattr(args, "sandbox", False),
+                                    sandbox=sandbox_requested,
                                     package_version=version)
         created_outputs = [Path(path) for path in written if _under(Path(path), cfg.bin_dir)]
         if launcher:
@@ -1788,6 +1853,7 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
             "name": package,
             "version": version,
             "architecture": architecture,
+            "source_package": control.get("Source", package).split()[0],
             "source_deb": str(source),
             "source_url": source_arg if source_arg.startswith(("http://", "https://")) else "",
             "sha256": source_fingerprint,
@@ -1811,8 +1877,8 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
                 "unmapped_sonames": unmapped_sonames,
             },
             "isolated_libs": [],
-            "sandbox": {"enabled": bool(getattr(args, "sandbox", False)),
-                        "runtime": "firejail-or-bwrap" if getattr(args, "sandbox", False) else None},
+            "sandbox": {"enabled": sandbox_requested,
+                        "runtime": "firejail-or-bwrap" if sandbox_requested else None},
             "snapshot": None,
             "audit": [{"action": "install", "at": installed_at}],
         })
@@ -2205,7 +2271,7 @@ def cmd_update(args: argparse.Namespace, cfg: Config) -> None:
     repos = load_repos(cfg)
     if repos:
         print(f"{len(repos)} Debian source definition(s) are registered.")
-        print("Saved Debian sources remain informational until signed Release verification is available.")
+        print("Use `debark repo sync NAME` to fetch and verify beta APT indexes.")
 
 def cmd_upgrade(args: argparse.Namespace, cfg: Config) -> None:
     count = len(load_db(cfg))
@@ -2215,7 +2281,55 @@ def cmd_upgrade(args: argparse.Namespace, cfg: Config) -> None:
         print("Pinned versions:")
         for package, version in sorted(pins.items()):
             print(f"  {package}: {version}")
-    print("Automatic upgrades are unavailable; install a newer local package or direct URL explicitly.")
+    if cfg.experimental_features:
+        repos = load_repos(cfg)
+        found = False
+        for package, entry in load_db(cfg).items():
+            repo_name = entry.get("apt_repository")
+            if not isinstance(repo_name, str) or repo_name not in repos:
+                continue
+            try:
+                index = experimental.load_synced_packages(cfg.cache_dir, repo_name)
+                candidate = experimental.newest_package(index["packages"], package)
+                if candidate and experimental.compare_debian_versions(
+                    candidate["Version"], str(entry.get("version", "0"))
+                ) > 0:
+                    print(f"{package}: {entry.get('version', '?')} → {candidate['Version']} ({repo_name})")
+                    found = True
+            except experimental.ExperimentalError as exc:
+                warn(str(exc))
+        if found:
+            print("Beta check only: package replacement is not enabled in this release.")
+        elif not any(entry.get("apt_repository") for entry in load_db(cfg).values()):
+            print("No APT-managed DebArk packages are registered for update checks.")
+    else:
+        print("Automatic upgrades are unavailable; install a newer local package or direct URL explicitly.")
+
+
+def _require_experimental(cfg: Config) -> None:
+    if not cfg.experimental_features:
+        fail("Experimental integrations are disabled. Enable them from the installer or with `debark config experimental_features true`.")
+
+
+def cmd_cve(args: argparse.Namespace, cfg: Config) -> None:
+    _require_experimental(cfg)
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", args.suite):
+        fail("Provide a valid Debian suite, such as bookworm or trixie.")
+    try:
+        tracker = experimental.fetch_tracker(cfg.cache_dir / "debian-security-tracker.json")
+        findings = experimental.package_cves(load_db(cfg), tracker, args.suite)
+    except experimental.ExperimentalError as exc:
+        fail(str(exc))
+    if not findings:
+        print(f"No matching Debian Security Tracker advisories were found for suite {args.suite}.")
+        return
+    for finding in findings:
+        fixed = f"; fixed in {finding['fixed_version']}" if finding["fixed_version"] else ""
+        print(f"{finding['package']} {finding['version']}: {finding['cve']} "
+              f"({finding['status']}{fixed})")
+        if finding["description"]:
+            print(f"  {finding['description']}")
+    print("Advisories are best-effort. Confirm each result with Debian's tracker before acting.")
 
 def cmd_pin(args: argparse.Namespace, cfg: Config) -> None:
     pins = load_pins(cfg)
@@ -2254,10 +2368,22 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
     elif args.repo_command == "add":
         if not re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", args.name):
             fail("Invalid repository name.")
-        if not args.url.startswith(("https://", "http://")):
-            fail("Repository URL must use HTTP or HTTPS.")
-        repos[args.name] = {"url": args.url, "suite": args.suite,
-                            "components": args.components, "added_at": utc_now()}
+        if not args.url.startswith("https://") or "@" in args.url.split("//", 1)[-1].split("/", 1)[0]:
+            fail("Experimental APT repositories must use credential-free HTTPS URLs.")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9./_-]{0,79}", args.suite):
+            fail("Invalid Debian suite name.")
+        if any(part in (".", "..") for part in Path(args.suite).parts):
+            fail("Invalid Debian suite path.")
+        if any(not re.fullmatch(r"[A-Za-z0-9.+_-]{1,80}", item) for item in args.components):
+            fail("Invalid Debian repository component.")
+        item = {"url": args.url.rstrip("/"), "suite": args.suite,
+                "components": args.components, "added_at": utc_now()}
+        if args.keyring:
+            keyring = Path(args.keyring).expanduser()
+            if keyring.is_symlink() or not keyring.is_file():
+                fail("The trusted keyring must be an existing regular file.")
+            item["keyring"] = str(keyring.resolve())
+        repos[args.name] = item
         save_repos(cfg, repos)
         ok(f"Added repository {args.name}.")
     elif args.repo_command == "remove":
@@ -2267,15 +2393,66 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
         save_repos(cfg, repos)
         ok(f"Removed repository {args.name}.")
     elif args.repo_command == "sync":
-        fail("Debian repository sync is disabled until Release metadata signature verification is implemented.")
+        _require_experimental(cfg)
+        selected = [args.name] if args.name else sorted(repos)
+        if not selected:
+            fail("No Debian repositories are registered.")
+        cfg.ensure()
+        for name in selected:
+            if name not in repos:
+                fail(f"Repository not found: {name}")
+            try:
+                result = experimental.sync_repository(
+                    {"name": name, **repos[name]}, cfg.cache_dir
+                )
+            except experimental.ExperimentalError as exc:
+                fail(str(exc))
+            ok(f"Verified {result['package_count']} package entries from {name} ({result['suite']}).")
+    elif args.repo_command == "install":
+        _require_experimental(cfg)
+        if not PACKAGE_NAME.fullmatch(args.package):
+            fail("Invalid Debian package name.")
+        if args.package in load_db(cfg):
+            fail("Updating an already-installed package is not available in the experimental preview yet.")
+        if args.name not in repos:
+            fail(f"Repository not found: {args.name}")
+        try:
+            index = experimental.load_synced_packages(cfg.cache_dir, args.name)
+            candidate = experimental.newest_package(index["packages"], args.package, args.version)
+            if candidate is None:
+                fail(f"Package {args.package} was not found in the verified index.")
+            package_path = cfg.cache_dir / "apt" / args.name / "packages" / (
+                f"{args.package}-{re.sub(r'[^A-Za-z0-9.+:~_-]', '_', candidate['Version'])}.deb"
+            )
+            experimental.download_package(index["url"], candidate, package_path)
+        except experimental.ExperimentalError as exc:
+            fail(str(exc))
+        install_args = argparse.Namespace(
+            deb=str(package_path), dry_run=False, no_deps=args.no_deps, yes=args.yes,
+            expected_sha256=candidate["SHA256"], sha256="", gpg_signature=None,
+            keyring=None, requested_version=candidate["Version"], sandbox=args.sandbox,
+            snapshot=False, verify_after=True,
+        )
+        cmd_install(install_args, cfg)
+        database = load_db(cfg)
+        entry = database.get(args.package)
+        if entry:
+            entry["apt_repository"] = args.name
+            entry["apt_suite"] = repos[args.name]["suite"]
+            entry["source_package"] = str(candidate.get("Source", args.package)).split()[0]
+            entry["source_url"] = f"{index['url']}/{candidate['Filename']}"
+            write_json(cfg.pkgs_dir / args.package / "manifest.json", entry)
+            save_db(cfg, {args.package: entry})
+            if cfg.mode == "user":
+                set_user_owner(cfg.pkgs_dir / args.package, recursive=True)
     else:
-        print("Use: debark repo add, debark repo remove, or debark repo list")
+        print("Use: debark repo add, remove, list, sync, or install")
 
 def cmd_config(args: argparse.Namespace, cfg: Config) -> None:
-    allowed = {"auto_yes", "colors", "threads"}
+    allowed = {"auto_yes", "colors", "threads", "experimental_features"}
     if args.key is not None:
         if args.key not in allowed or args.value is None:
-            fail("Set one of: auto_yes, colors, threads.")
+            fail("Set one of: auto_yes, colors, threads, experimental_features.")
         value: Any = args.value
         if args.key == "threads":
             try:
@@ -2292,6 +2469,7 @@ def cmd_config(args: argparse.Namespace, cfg: Config) -> None:
     for key, value in (("mode", cfg.mode), ("config", cfg.cfg_file), ("data", cfg.data_dir),
                        ("apps", cfg.apps_root), ("bin", cfg.bin_dir),
                        ("auto_yes", cfg.auto_yes), ("colors", cfg.colors),
+                       ("experimental_features", cfg.experimental_features),
                        ("threads", cfg.threads)):
         print(f"{key}: {value}")
 
@@ -2881,7 +3059,7 @@ Commands:
   repair PACKAGE            Restore missing or damaged managed files
   gc                        Clean orphaned DebArk markers
   update                    Refresh Arch file metadata and local maps
-  upgrade                   Report saved sources and pinned versions
+  upgrade                   Check for newer versions in synced beta APT indexes
   snapshot PACKAGE          Save a verified local restore point
   rollback PACKAGE [ID]     Restore a saved local restore point
   extract PACKAGE.deb       Extract payload without installing
@@ -2896,7 +3074,8 @@ Commands:
   license [PACKAGE]          Show declared package licenses
   config [KEY VALUE]        Show or change configuration
   doctor                    Inspect local prerequisites
-  repo add|remove|list      Manage saved Debian source definitions
+  repo add|remove|list|sync|install  Manage Debian sources (sync/install are beta)
+  cve --suite SUITE         Check installed packages against Debian advisories (beta)
   log                       Show recent audit events
   stats                     Show installed package statistics
   help [install|repo]       Show help
@@ -3005,6 +3184,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("url")
     add.add_argument("suite")
     add.add_argument("components", nargs="+")
+    add.add_argument("--keyring", help="trusted keyring for experimental APT sync")
     remove_repo = repo_sub.add_parser("remove")
     common(remove_repo)
     remove_repo.add_argument("name")
@@ -3012,6 +3192,19 @@ def build_parser() -> argparse.ArgumentParser:
     common(repo_list)
     repo_sync = repo_sub.add_parser("sync")
     common(repo_sync)
+    repo_sync.add_argument("name", nargs="?")
+    repo_install = repo_sub.add_parser("install")
+    common(repo_install)
+    repo_install.add_argument("name")
+    repo_install.add_argument("package")
+    repo_install.add_argument("version", nargs="?")
+    repo_install.add_argument("-y", "--yes", action="store_true")
+    repo_install.add_argument("--no-deps", action="store_true")
+    repo_install.add_argument("--sandbox", action="store_true",
+                              help="launch the app with the optional network-isolated sandbox")
+    cve = sub.add_parser("cve", help="check advisories (experimental)")
+    common(cve)
+    cve.add_argument("--suite", required=True, help="Debian suite, such as bookworm")
     help_parser = sub.add_parser("help")
     help_parser.add_argument("topic", nargs="?")
     for name in ("repair", "gc", "log", "stats"):
@@ -3140,7 +3333,7 @@ def main() -> int:
         "install": cmd_install, "remove": cmd_remove, "list": cmd_list,
         "info": cmd_info, "search": cmd_search, "files": cmd_files,
         "verify": cmd_verify, "scan": cmd_scan, "update": cmd_update,
-        "upgrade": cmd_upgrade, "repo": cmd_repo, "config": cmd_config,
+        "upgrade": cmd_upgrade, "repo": cmd_repo, "cve": cmd_cve, "config": cmd_config,
         "doctor": cmd_doctor, "about": cmd_about,
         "repair": cmd_repair, "gc": cmd_gc, "log": cmd_log, "stats": cmd_stats,
         "snapshot": cmd_snapshot, "rollback": cmd_rollback, "extract": cmd_extract,

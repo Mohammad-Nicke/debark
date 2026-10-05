@@ -1,5 +1,5 @@
 #compdef debark
-# DebArk Zsh completion · Master Nick (@Mohammad-Nicke)
+# DebArk Zsh completion · Mr.Nick (@Mohammad-Nicke)
 # https://github.com/Mohammad-Nicke/debark
 
 _arguments -C \
@@ -10,7 +10,7 @@ _arguments -C \
   '--quiet[Suppress informational output]' \
   '--verbose[Show diagnostic details]' \
   '--threads=[Copy workers]:count:' \
-  '1:command:((install\:Install remove\:Remove list\:List search\:Search info\:Info files\:Files verify\:Verify scan\:Scan update\:Update upgrade\:Upgrade config\:Config doctor\:Doctor repo\:Repository repair\:Repair gc\:Cleanup log\:Log stats\:Statistics snapshot\:Snapshot rollback\:Rollback extract\:Extract convert\:Convert export\:Export import\:Import bulk\:Bulk watch\:Watch profile\:Profile plugin\:Plugins pin\:Pin license\:Licenses help\:Help about\:About))' \
+  '1:command:((install\:Install remove\:Remove list\:List search\:Search info\:Info files\:Files verify\:Verify scan\:Scan update\:Update upgrade\:Upgrade config\:Config doctor\:Doctor repo\:Repository cve\:CVE repair\:Repair gc\:Cleanup log\:Log stats\:Statistics snapshot\:Snapshot rollback\:Rollback extract\:Extract convert\:Convert export\:Export import\:Import bulk\:Bulk watch\:Watch profile\:Profile plugin\:Plugins pin\:Pin license\:Licenses help\:Help about\:About))' \
   '*::argument:->args'
 
 case "$words[2]" in
