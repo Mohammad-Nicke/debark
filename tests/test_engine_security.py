@@ -235,7 +235,12 @@ class SandboxWrapperTests(unittest.TestCase):
             wrapper = root / "bin/demo"
 
             engine.make_wrapper(
-                wrapper, app_root, executable, object(), payload, sandbox=True,
+                wrapper,
+                app_root,
+                executable,
+                object(),
+                payload,
+                sandbox=True,
             )
             content = wrapper.read_text(encoding="utf-8")
 
