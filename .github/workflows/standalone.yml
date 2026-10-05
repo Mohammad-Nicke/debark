@@ -36,16 +36,16 @@ jobs:
               /opt/debark-build-venv/bin/python3 -m pip install --disable-pip-version-check --no-cache-dir Nuitka && \
               export PATH="/opt/debark-build-venv/bin:$PATH" && \
               bash ./scripts/build-standalone.sh /workspace/dist/nuitka && \
-              cp src/debark/data/debark-release-public.pem /workspace/dist/nuitka/debark.dist/debark-release-public.pem && \
-              cp LICENSE LICENSE.fa /workspace/dist/nuitka/debark.dist/ && \
+              cp src/debark/data/debark-release-public.pem /workspace/dist/nuitka/standalone_entry.dist/debark-release-public.pem && \
+              cp LICENSE LICENSE.fa /workspace/dist/nuitka/standalone_entry.dist/ && \
               python3 scripts/create-release-manifest.py \
-                --root /workspace/dist/nuitka/debark.dist \
+                --root /workspace/dist/nuitka/standalone_entry.dist \
                 --root-kind standalone \
                 --commit "$GITHUB_SHA" \
                 --version "$DEBARK_VERSION" \
-                --output /workspace/dist/nuitka/debark.dist/official.manifest && \
+                --output /workspace/dist/nuitka/standalone_entry.dist/official.manifest && \
               tar -czf /workspace/dist/debark-standalone-x86_64-unsigned.tar.gz \
-                -C /workspace/dist/nuitka debark.dist'
+                -C /workspace/dist/nuitka standalone_entry.dist'
 
       - uses: actions/upload-artifact@v7
         with:
@@ -81,7 +81,7 @@ jobs:
           archive = Path(sys.argv[1])
           destination = Path(sys.argv[2])
           expected_commit, expected_version = sys.argv[3:]
-          root = destination / "debark.dist"
+          root = destination / "standalone_entry.dist"
           destination.mkdir(parents=True, exist_ok=True)
 
           with tarfile.open(archive, "r:gz") as bundle:
@@ -93,7 +93,7 @@ jobs:
                   name = PurePosixPath(member.name)
                   canonical_name = name.as_posix()
                   if (name.is_absolute() or ".." in name.parts or
-                          not name.parts or name.parts[0] != "debark.dist" or
+                          not name.parts or name.parts[0] != "standalone_entry.dist" or
                           member.name.rstrip("/") != canonical_name or
                           canonical_name in seen):
                       raise SystemExit(f"Unsafe standalone archive path: {member.name}")
@@ -196,7 +196,7 @@ jobs:
           printf '%s\n' "$DEBARK_RELEASE_PRIVATE_KEY" > "$key_file"
           chmod 600 "$key_file"
 
-          root=dist/verified/debark.dist
+          root=dist/verified/standalone_entry.dist
           public_key="$root/debark-release-public.pem"
           manifest="$root/official.manifest"
           signature="$manifest.sig"
@@ -218,7 +218,7 @@ jobs:
 
           mkdir -p dist/release
           tar -czf dist/release/debark-standalone-x86_64.tar.gz \
-            -C dist/verified debark.dist
+            -C dist/verified standalone_entry.dist
 
       - uses: actions/upload-artifact@v7
         with:
