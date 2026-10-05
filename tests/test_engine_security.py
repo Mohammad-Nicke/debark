@@ -306,8 +306,12 @@ class InstallLifecycleTests(unittest.TestCase):
             self.assertTrue(launcher.is_file())
             self.assertTrue(launcher.stat().st_mode & 0o111)
             self.assertFalse(marker.exists(), "Debian maintainer scripts must remain data only")
-            self.assertTrue(all(Path(record["path"]).is_relative_to(root) for record in
-                                engine.manifest_files(engine.load_db(config)["debark-fixture"])))
+            self.assertTrue(
+                all(
+                    Path(record["path"]).is_relative_to(root)
+                    for record in engine.manifest_files(engine.load_db(config)["debark-fixture"])
+                )
+            )
 
             remove_args = engine.build_parser().parse_args(
                 ["remove", "--user", "-y", "debark-fixture"]
@@ -410,9 +414,7 @@ class ExperimentalFeatureTests(unittest.TestCase):
             "openssl": {
                 "CVE-2026-1234": {
                     "description": "Example advisory",
-                    "releases": {
-                        "bookworm": {"status": "resolved", "fixed_version": "3.0.11-1"}
-                    },
+                    "releases": {"bookworm": {"status": "resolved", "fixed_version": "3.0.11-1"}},
                 }
             }
         }
@@ -444,25 +446,35 @@ class ExperimentalFeatureTests(unittest.TestCase):
             cache = Path(temporary)
             index_path = cache / "apt/fixture/packages.json"
             index_path.parent.mkdir(parents=True)
-            index_path.write_text(json.dumps({
-                "repository": "fixture",
-                "architecture": "amd64",
-                "synced_at": 100,
-                "valid_until": 200,
-                "packages": [],
-            }), encoding="utf-8")
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "repository": "fixture",
+                        "architecture": "amd64",
+                        "synced_at": 100,
+                        "valid_until": 200,
+                        "packages": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             self.assertEqual(
                 engine.experimental.load_synced_packages(cache, "fixture", now=150)["packages"], []
             )
             with self.assertRaises(engine.experimental.ExperimentalError):
                 engine.experimental.load_synced_packages(cache, "fixture", now=201)
-            index_path.write_text(json.dumps({
-                "repository": "another",
-                "architecture": "amd64",
-                "synced_at": 100,
-                "valid_until": 200,
-                "packages": [],
-            }), encoding="utf-8")
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "repository": "another",
+                        "architecture": "amd64",
+                        "synced_at": 100,
+                        "valid_until": 200,
+                        "packages": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             with self.assertRaises(engine.experimental.ExperimentalError):
                 engine.experimental.load_synced_packages(cache, "fixture", now=150)
 
@@ -537,9 +549,29 @@ class SandboxWrapperTests(unittest.TestCase):
         if not bwrap:
             self.skipTest("bubblewrap is not installed")
         probe = subprocess.run(
-            [bwrap, "--die-with-parent", "--new-session", "--unshare-all", "--ro-bind", "/", "/",
-             "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/home",
-             "--tmpfs", "/root", "--tmpfs", "/run/user", "--", "/usr/bin/true"],
+            [
+                bwrap,
+                "--die-with-parent",
+                "--new-session",
+                "--unshare-all",
+                "--ro-bind",
+                "/",
+                "/",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--tmpfs",
+                "/tmp",
+                "--tmpfs",
+                "/home",
+                "--tmpfs",
+                "/root",
+                "--tmpfs",
+                "/run/user",
+                "--",
+                "/usr/bin/true",
+            ],
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
