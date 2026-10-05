@@ -37,6 +37,7 @@ jobs:
               export PATH="/opt/debark-build-venv/bin:$PATH" && \
               bash ./scripts/build-standalone.sh /workspace/dist/nuitka && \
               cp src/debark/data/debark-release-public.pem /workspace/dist/nuitka/debark.dist/debark-release-public.pem && \
+              cp LICENSE LICENSE.fa /workspace/dist/nuitka/debark.dist/ && \
               python3 scripts/create-release-manifest.py \
                 --root /workspace/dist/nuitka/debark.dist \
                 --root-kind standalone \
@@ -212,6 +213,8 @@ jobs:
             -in "$manifest" -out "$signature"
           openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin \
             -in "$manifest" -sigfile "$signature" >/dev/null
+
+          "$root/debark-cli" --help >/dev/null
 
           mkdir -p dist/release
           tar -czf dist/release/debark-standalone-x86_64.tar.gz \
