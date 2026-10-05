@@ -214,7 +214,11 @@ jobs:
           openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin \
             -in "$manifest" -sigfile "$signature" >/dev/null
 
-          "$root/debark-cli" --help >/dev/null
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE/$root:/debark:ro" \
+            archlinux:latest \
+            bash -lc 'pacman -Syu --noconfirm --needed openssl && \
+              /debark/debark-cli --help >/dev/null'
 
           mkdir -p dist/release
           tar -czf dist/release/debark-standalone-x86_64.tar.gz \
