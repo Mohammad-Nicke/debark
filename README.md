@@ -118,7 +118,7 @@ Useful install options:
 | <code>--yes</code> | Accept DebArk and pacman prompts without asking |
 | <code>--snapshot</code> | Save a restore point after installation |
 | <code>--verify</code> / <code>--no-verify</code> | Control the post-install file-hash check; verification is on by default |
-| <code>--sandbox</code> | Disable network access and make the home directory read-only in an available sandbox launcher; see the explanation below |
+| <code>--sandbox</code> | Disable network access and use a temporary, empty home in an available sandbox launcher; see the explanation below |
 | <code>--sha256 HASH</code> | Require an exact package digest |
 | <code>--gpg-signature FILE --keyring FILE</code> | Check a detached signature against a keyring you already trust |
 | <code>--json</code> | Print structured output where supported |
@@ -133,16 +133,37 @@ Other commands include <code>extract</code> and <code>convert</code> for working
 
 DebArk compares Debian dependency names with a built-in map, locally configured overrides, installed Arch packages and pacman's file-provider data. It can also inspect ELF library requirements with <code>readelf</code>. The built-in map is intentionally cautious: similar names alone are not enough to trigger an automatic install.
 
-Run <code>debark update</code> to refresh Arch file-provider data used during dependency checks. This does not update installed Debian apps. The <code>upgrade</code> command currently reports saved sources and version pins; automatic app upgrades are not available yet.
+Run <code>debark update</code> to refresh Arch file-provider data used during dependency checks. This does not update installed Debian apps.
+
+<details>
+<summary>Try the experimental APT and security tools</summary>
+
+The installer offers an opt-in beta preview for signed APT index sync, installing new packages from a synced index, Debian Security Tracker checks, and update detection. The preview may be incomplete or fail. It does not automatically replace already-installed apps.
+
+If you skipped the prompt, enable the preview with <code>debark config experimental_features true</code>. Add a repository with a keyring you already trust, then sync and install from it:
+
+~~~sh
+debark repo add debian https://deb.debian.org/debian bookworm main --keyring /path/to/trusted-archive-keyring.gpg
+debark repo sync debian
+debark repo install debian PACKAGE [--sandbox]
+debark cve --suite bookworm
+debark upgrade
+~~~
+
+The APT preview accepts HTTPS repositories only. It verifies the signed <code>Release</code> file with <code>gpgv</code>, checks index hashes and sizes from that file, and verifies the downloaded package against its indexed SHA256. You must obtain and trust the keyring yourself; DebArk does not import keys or decide which publishers to trust. A missing <code>gpgv</code> command requires the Arch <code>gnupg</code> package.
+
+The CVE command compares saved Debian package versions with tracker data for the suite you name. It can report uncertain results; check each advisory with Debian before acting. <code>debark upgrade</code> only lists newer versions from already-synced indexes. Replacing an installed package is not part of this beta preview yet.
+
+</details>
 
 ## Sandbox and package safety
 
 <details>
 <summary>What does DebArk's sandbox option do?</summary>
 
-A sandbox is an extra launcher layer that restricts some of an app's access to the system. With <code>--sandbox</code>, DebArk uses Firejail or bubblewrap if one is already installed. The launcher requests network isolation, keeps the home directory read-only, and gives the app a private temporary directory and device view. The installed runtime and kernel must support these restrictions.
+A sandbox is an extra launcher layer that restricts an app's access to the system. With <code>--sandbox</code>, DebArk uses bubblewrap or Firejail if one is already installed. It disables network access, gives the app a temporary empty home and private temporary files, and exposes the system filesystem read-only. It hides the logged-in session's runtime sockets and removes common session-bus, SSH-agent, GPG-agent, X11 and Wayland environment variables.
 
-Sandboxing is optional and is not enabled by default because it can prevent apps from saving settings or reaching the network. The app can still read files in your home directory, and the runtime's policy depends on your system. Treat this as an extra restriction, not a dependable security boundary for hostile software or a substitute for trusting the package source.
+Sandboxing is optional and is not enabled by default because it prevents network access and persistent home-directory settings, and may stop graphical apps or apps that need session services from working. A sandboxed app can still read system files permitted to your account. Treat it as an extra restriction, not a dependable security boundary for hostile software or a substitute for trusting the package source. If the selected runtime is unavailable when you launch the app, its launcher exits with an error instead of running it unsandboxed.
 
 </details>
 
@@ -150,7 +171,7 @@ Before installing packages, keep these limits in mind:
 
 - A SHA-256 digest only proves the file matches the digest you supplied; it does not identify who published it.
 - Signature checks use only a keyring you provide. DebArk does not import keys or decide which publishers to trust.
-- Saved Debian repository definitions are notes for now. DebArk does not download APT indexes or install packages from those repositories.
+- APT repository sync and install are experimental, require a trusted keyring, and support amd64 indexes only.
 - Some packages require maintainer scripts, system services or Debian-specific setup. DebArk does not perform those steps automatically.
 
 See [feature status](docs/FEATURES.md) for what is implemented and what is still planned, and [architecture](docs/ARCHITECTURE.md) for how installation works.
@@ -187,6 +208,6 @@ Only packages that include a usable desktop entry can be added to the menu. Some
 
 ## Project
 
-Maintained by [Master Nick (@Mohammad-Nicke)](https://github.com/Mohammad-Nicke). DebArk is released under the [Unlicense](UNLICENSE).
+Maintained by [Mr.Nick (@Mohammad-Nicke)](https://github.com/Mohammad-Nicke). DebArk is released under the [Unlicense](UNLICENSE).
 
 Project guides: [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Roadmap](ROADMAP.md)

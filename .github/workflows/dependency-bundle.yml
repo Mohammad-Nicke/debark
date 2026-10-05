@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: arch-dependency-bundle
+  group: arch-dependency-bundle-v0.1
   cancel-in-progress: false
 
 jobs:
@@ -98,22 +98,14 @@ jobs:
                 -C /bundle manifest.txt SHA256SUMS "${names[@]}"
             '
 
-      - name: Publish rolling release asset
+      - name: Update the existing 0.1 release asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           release_file="$GITHUB_WORKSPACE/release/debark-arch-dependencies-x86_64.tar.gz"
-          notes="Current x86_64 Arch Linux package files for the complete dependency closure of DebArk's required packages. Includes upstream Arch signatures and a SHA-256 manifest. Refreshed weekly. Keep the system keyring current; pacman verifies the package signatures during installation."
-
-          if gh release view arch-dependencies --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload arch-dependencies "$release_file" \
-              --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit arch-dependencies --repo "$GITHUB_REPOSITORY" \
-              --title "DebArk Arch dependency bundle (x86_64)" \
-              --notes "$notes" --prerelease
-          else
-            gh release create arch-dependencies "$release_file" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "DebArk Arch dependency bundle (x86_64)" \
-              --notes "$notes" --prerelease --target "$GITHUB_SHA"
-          fi
+          gh release view v0.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || {
+            printf 'The existing v0.1 release was not found; refusing to create a tag.\n' >&2
+            exit 1
+          }
+          gh release upload v0.1 "$release_file" \
+            --repo "$GITHUB_REPOSITORY" --clobber

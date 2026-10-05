@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# DebArk installer, maintained by Master Nick (@Mohammad-Nicke).
+# DebArk installer, maintained by Mr.Nick (@Mohammad-Nicke).
 # Project: https://github.com/Mohammad-Nicke/debark
 set -euo pipefail
 umask 022
 
 REPO_URL="https://github.com/Mohammad-Nicke/debark.git"
 REPO_ARCHIVE_URL="https://github.com/Mohammad-Nicke/debark/archive/refs/heads/main.tar.gz"
-DEPENDENCY_BUNDLE_URL="https://github.com/Mohammad-Nicke/debark/releases/download/arch-dependencies/debark-arch-dependencies-x86_64.tar.gz"
-MAINTAINER="Master Nick (@Mohammad-Nicke)"
+DEPENDENCY_BUNDLE_URL="https://github.com/Mohammad-Nicke/debark/releases/download/v0.1/debark-arch-dependencies-x86_64.tar.gz"
+MAINTAINER="Mr.Nick (@Mohammad-Nicke)"
 BUNDLE_MAX_AGE_DAYS=14
 TMP_DIR="$(mktemp -d -t debark-install-XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -299,6 +299,17 @@ case "$MODE" in
     *) die "Choose 1 or 2." ;;
 esac
 
+EXPERIMENTAL_FEATURES="false"
+EXPERIMENTAL_PROMPTED="false"
+if [ -t 3 ]; then
+    printf '\n%sExperimental preview%s: signed APT sync/install, Debian CVE review and update checks.\n' "$C_CYAN" "$C_RESET"
+    printf 'These features are beta, may be incomplete or fail, and do not automatically replace installed apps.\n'
+    if ask_yes_no "Enable the experimental preview?" "n"; then
+        EXPERIMENTAL_FEATURES="true"
+    fi
+    EXPERIMENTAL_PROMPTED="true"
+fi
+
 install_required_dependencies "$SOURCE_DIR/dependencies/required-arch.txt"
 command -v python3 >/dev/null 2>&1 || die "The python package was installed, but python3 is still unavailable."
 command -v ar >/dev/null 2>&1 || die "The binutils package was installed, but ar is still unavailable."
@@ -410,17 +421,18 @@ run_privileged install -Dm 644 "$SOURCE_DIR/completions/debark.fish" \
 run_privileged install -Dm 644 "$SOURCE_DIR/man/debark.1" "$MAN_DIR/debark.1"
 
 CONFIG_TMP="$TMP_DIR/config.json"
-python3 - "$CONFIG_TMP" "$AUTO_YES" "$COLORS" "$THREADS" <<'PY'
+python3 - "$CONFIG_TMP" "$AUTO_YES" "$COLORS" "$THREADS" "$EXPERIMENTAL_FEATURES" <<'PY'
 import json
 import sys
-path, auto_yes, colors, threads = sys.argv[1:]
+path, auto_yes, colors, threads, experimental_features = sys.argv[1:]
 config = {
     "managed_by": "DebArk",
-    "maintainer": "Master Nick (@Mohammad-Nicke)",
+    "maintainer": "Mr.Nick (@Mohammad-Nicke)",
     "repository": "https://github.com/Mohammad-Nicke/debark",
     "auto_yes": auto_yes == "true",
     "colors": colors == "true",
     "threads": int(threads),
+    "experimental_features": experimental_features == "true",
 }
 with open(path, "w", encoding="utf-8") as stream:
     json.dump(config, stream, indent=2)
@@ -434,6 +446,46 @@ if [ ! -f "$CFG_DIR/config.json" ]; then
     fi
 else
     printf 'Keeping existing preferences at %s/config.json\n' "$CFG_DIR"
+fi
+
+if [ "$EXPERIMENTAL_PROMPTED" = "true" ]; then
+    CONFIG_FLAG_HELPER="$TMP_DIR/set-experimental-config.py"
+    cat > "$CONFIG_FLAG_HELPER" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+path, enabled = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    values = json.load(stream)
+if not isinstance(values, dict):
+    raise SystemExit("DebArk config must contain a JSON object")
+values["experimental_features"] = enabled == "true"
+fd, temporary = tempfile.mkstemp(prefix=".debark-config-", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        json.dump(values, stream, indent=2, ensure_ascii=False)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+except Exception:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+    if [ "$INSTALL_MODE" = "system" ] || { [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; }; then
+        run_privileged python3 "$CONFIG_FLAG_HELPER" "$CFG_DIR/config.json" "$EXPERIMENTAL_FEATURES"
+    else
+        python3 "$CONFIG_FLAG_HELPER" "$CFG_DIR/config.json" "$EXPERIMENTAL_FEATURES"
+    fi
+    if [ "$INSTALL_MODE" = "user" ] && [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+        run_privileged chown "$INSTALL_UID:$INSTALL_GID" "$CFG_DIR/config.json"
+    fi
 fi
 
 if [ "$INSTALL_MODE" = "user" ] && [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then

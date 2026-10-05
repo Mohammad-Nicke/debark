@@ -10,8 +10,9 @@ These measures reduce specific installation risks; they do not make an untrusted
 
 - A SHA-256 check proves a package matches the digest supplied by the caller. It does not establish who published the package.
 - Detached signatures are checked only when the caller supplies a keyring they trust. DebArk does not import keys or establish source trust automatically.
-- Applications are not sandboxed by default. `--sandbox` asks Firejail or bubblewrap to isolate networking, make the home directory read-only, and provide private temporary and device views. The app can still read files in the home directory, and the runtime and kernel must support the requested restrictions; do not rely on it as a security boundary for hostile software.
-- Debian repository definitions are informational. DebArk does not currently fetch APT indexes or verify signed repository metadata.
+- Applications are not sandboxed by default. `--sandbox` asks Firejail or bubblewrap to disable networking, provide a temporary home and private temporary/device views, and expose the system filesystem read-only. Some session sockets may remain reachable, runtime behavior varies, and sandboxed apps may not work correctly. Do not rely on it as a security boundary for hostile software.
+- Experimental APT sync verifies a detached `Release.gpg` signature using only the keyring supplied by the user, then checks package-index and package SHA256 values listed in the signed Release metadata. DebArk does not establish key trust, support `InRelease`-only sources, or automatically replace installed applications. The preview supports x86_64/amd64 only.
+- Experimental CVE results use Debian Security Tracker data over HTTPS and may be incomplete or uncertain. Verify each result against Debian's tracker.
 - Manifest hashes help detect later file changes; they do not certify that the original package was benign.
 
 ## Reporting a vulnerability

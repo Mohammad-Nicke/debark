@@ -1,4 +1,4 @@
-# DebArk Bash completion · Master Nick (@Mohammad-Nicke)
+# DebArk Bash completion · Mr.Nick (@Mohammad-Nicke)
 # https://github.com/Mohammad-Nicke/debark
 
 _debark_completions() {
@@ -7,7 +7,7 @@ _debark_completions() {
 
     current="${COMP_WORDS[COMP_CWORD]}"
     previous="${COMP_WORDS[COMP_CWORD-1]}"
-    commands="install remove list search info files verify scan update upgrade config doctor repo repair gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about"
+    commands="install remove list search info files verify scan update upgrade config doctor repo cve repair gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about"
 
     case "$previous" in
         install|info|extract|convert)

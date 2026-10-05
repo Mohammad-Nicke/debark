@@ -28,8 +28,14 @@ Save the current managed application tree as a local restore point.
 .B rollback PACKAGE [SNAPSHOT]
 Restore a saved application tree.
 .TP
-.B repo add|remove|list
-Manage local Debian source definitions. This does not enable APT or install packages from those sources.
+.B repo add|remove|list|sync|install
+Manage Debian sources. Sync and install are experimental and require a trusted keyring.
+.TP
+.B cve --suite SUITE
+Compare installed Debian packages with Debian Security Tracker data. Experimental.
+.TP
+.B upgrade
+Show newer versions available in already-synced experimental APT indexes. Does not replace installed apps.
 .SH OPTIONS
 .TP
 .BR -u , " --user"
@@ -48,7 +54,7 @@ Skip installing mapped Arch dependencies.
 Save a local restore point after a successful install.
 .TP
 .B --sandbox
-Use an available sandbox runtime for generated launchers.
+Use bubblewrap or Firejail for generated launchers. Networking is disabled, the app receives a temporary home, and the system filesystem is read-only. Some apps may not work; a missing runtime causes the launcher to exit.
 .TP
 .B --threads N
 Set the parallel file-copy worker count from 1 through 16.
@@ -62,7 +68,7 @@ Suppress informational output where supported.
 .BR -v , " --verbose"
 Show diagnostic details where supported.
 .SH SAFETY
-Debian maintainer scripts are never executed. Removal keeps files whose contents changed. Applications are not sandboxed unless the install used --sandbox and a supported runtime is available. Review package sources before installation.
+Debian maintainer scripts are never executed. Removal keeps files whose contents changed. Applications are not sandboxed unless the install used --sandbox and a supported runtime is available. Experimental APT sync verifies signed Release metadata with the keyring you provide; CVE reports may be incomplete or uncertain. Verify sources and findings before acting.
 .SH FILES
 .TP
 .I /var/lib/debark/db.json
@@ -74,7 +80,7 @@ Per-package manifests and saved source packages.
 .BR pacman (8),
 .BR ar (1)
 .SH PROJECT
-Maintained by Master Nick (Mohammad-Nicke).
+Maintained by Mr.Nick (Mohammad-Nicke).
 .PP
 Repository: https://github.com/Mohammad-Nicke/debark
 .SH LICENSE
