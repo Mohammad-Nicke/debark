@@ -1,0 +1,135 @@
+name: Publish signed source release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - debark
+      - src/debark/**
+      - completions/**
+      - man/debark.1
+      - dependencies/required-arch.txt
+      - LICENSE
+      - LICENSE.fa
+      - scripts/create-release-manifest.py
+      - .github/workflows/sign-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-source-v0.1
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Package the files used by the online installer
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/source
+          version="$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' src/debark/__init__.py | head -n 1)"
+          [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+          git archive --format=tar --prefix=debark-main/ "$GITHUB_SHA" \
+            debark src/debark completions man/debark.1 \
+            dependencies/required-arch.txt LICENSE LICENSE.fa \
+            | gzip -n > dist/source/debark-source-main.tar.gz
+
+          python3 scripts/create-release-manifest.py \
+            --root src/debark \
+            --root-kind source \
+            --archive dist/source/debark-source-main.tar.gz \
+            --commit "$GITHUB_SHA" \
+            --version "$version" \
+            --output dist/source/debark-source-main.manifest
+          cp src/debark/data/debark-release-public.pem dist/source/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-source-input
+          path: dist/source/*
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-and-publish:
+    if: github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-24.04
+    environment: release-signing
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-source-input
+          path: dist/source
+
+      - name: Check inputs and sign the official manifest
+        shell: bash
+        env:
+          DEBARK_RELEASE_PRIVATE_KEY: ${{ secrets.DEBARK_RELEASE_PRIVATE_KEY }}
+          EXPECTED_VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          key_file="$RUNNER_TEMP/debark-release-private.pem"
+          derived_key="$RUNNER_TEMP/debark-derived-public.der"
+          checked_key="$RUNNER_TEMP/debark-checked-public.der"
+          trap 'rm -f "$key_file" "$derived_key" "$checked_key"' EXIT
+          [[ -n "$DEBARK_RELEASE_PRIVATE_KEY" ]] || {
+            printf 'The DEBARK_RELEASE_PRIVATE_KEY Actions secret is not set.\n' >&2
+            exit 1
+          }
+          printf '%s\n' "$DEBARK_RELEASE_PRIVATE_KEY" > "$key_file"
+          chmod 600 "$key_file"
+
+          public_key="dist/source/debark-release-public.pem"
+          manifest="dist/source/debark-source-main.manifest"
+          archive="dist/source/debark-source-main.tar.gz"
+          signature="$manifest.sig"
+          expected_fingerprint="e6054fe47a50b5eb33c955cac256746abe86c23e3aa4aeaf85216a89918ee55f"
+          actual_fingerprint="$(openssl pkey -pubin -in "$public_key" -outform DER | sha256sum | cut -d ' ' -f 1)"
+          [[ "$actual_fingerprint" = "$expected_fingerprint" ]]
+          openssl pkey -in "$key_file" -pubout -outform DER > "$derived_key"
+          openssl pkey -pubin -in "$public_key" -outform DER > "$checked_key"
+          cmp -s "$derived_key" "$checked_key" || {
+            printf 'The Actions signing key does not match the checked-in public key.\n' >&2
+            exit 1
+          }
+
+          value() { sed -n "s/^$1=//p" "$manifest"; }
+          [[ "$(head -n 1 "$manifest")" = 'DEBARK-OFFICIAL-MANIFEST 1' ]]
+          [[ "$(value repository)" = 'https://github.com/Mohammad-Nicke/debark' ]]
+          [[ "$(value commit)" = "$GITHUB_SHA" ]]
+          [[ "$(value version)" = "$EXPECTED_VERSION" ]]
+          [[ "$(value root_kind)" = source ]]
+          [[ "$(value archive_sha256)" = "$(sha256sum "$archive" | cut -d ' ' -f 1)" ]]
+
+          openssl pkeyutl -sign -inkey "$key_file" -rawin \
+            -in "$manifest" -out "$signature"
+          openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin \
+            -in "$manifest" -sigfile "$signature" >/dev/null
+
+      - name: Update assets on the existing v0.1 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v0.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || {
+            printf 'The existing v0.1 release was not found; refusing to create a tag.\n' >&2
+            exit 1
+          }
+          gh release upload v0.1 \
+            dist/source/debark-source-main.tar.gz \
+            dist/source/debark-source-main.manifest \
+            dist/source/debark-source-main.manifest.sig \
+            --repo "$GITHUB_REPOSITORY" --clobber

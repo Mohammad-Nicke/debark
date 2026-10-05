@@ -33,6 +33,7 @@ from typing import Any
 
 from . import __license__, __maintainer__, __url__, __version__
 from . import experimental
+from .integrity import IntegrityError, verify_official_copy
 from .plugins import enabled_plugins, run_hook, set_plugin_enabled
 from .resolver import rank_candidates
 
@@ -3631,6 +3632,11 @@ def _quiet_summary(command: str, output: str) -> str:
     return lines[-1]
 
 def main() -> int:
+    try:
+        verify_official_copy()
+    except IntegrityError as exc:
+        print(f"debark: official build verification failed: {exc}", file=sys.stderr)
+        return 126
     parser = build_parser()
     args = parser.parse_args(normalize_command_shortcuts(sys.argv[1:]))
     if getattr(args, "tui", False):

@@ -187,4 +187,4 @@ System mode uses `/etc/debark` and `/var/lib/debark`; per-user mode uses `~/.con
 
 Run `debark --help`, `debark help install`, or `man debark` for command details. Report security issues using [SECURITY.md](../SECURITY.md), and see [ARCHITECTURE.md](ARCHITECTURE.md) for implementation notes.
 
-DebArk is maintained by **Mr.Nick (Mohammad Nick)** and distributed under the [MIT License](../LICENSE).
+DebArk is maintained by **Mr.Nick (Mohammad Nick)**. New material is distributed under the [DebArk Source-Available License 1.0](../LICENSE): it allows use of the complete, unmodified program, but not customized versions or reuse of code fragments. The project is source-available, not open source. Earlier MIT-licensed copies remain under their original terms; see [LICENSE-MIT-LEGACY](../LICENSE-MIT-LEGACY).

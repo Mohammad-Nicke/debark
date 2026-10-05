@@ -5,7 +5,7 @@
 **Run Debian apps on Arch Linux, without spreading their files across the system.**
 
 [![Source version](https://img.shields.io/badge/source-0.1.1-blue)](CHANGELOG.md)
-[![License](https://img.shields.io/github/license/Mohammad-Nicke/debark)](LICENSE)
+[![License](https://img.shields.io/badge/license-Source--Available-orange)](LICENSE)
 [![CI](https://github.com/Mohammad-Nicke/debark/actions/workflows/ci.yml/badge.svg)](https://github.com/Mohammad-Nicke/debark/actions/workflows/ci.yml)
 
 </div>
@@ -28,11 +28,13 @@ Or use <code>wget</code>:
 bash -c "$(wget -qO- https://raw.githubusercontent.com/Mohammad-Nicke/debark/main/install.sh)"
 ~~~
 
-The installer always downloads the current source and required-package list from this GitHub repository. It first asks pacman to install missing packages through your configured Arch repositories. If those repositories cannot provide them, it downloads the current x86_64 package bundle from this project's GitHub Releases. The bundle includes the full dependency closure resolved from Arch's package database, upstream package signatures and checksums; pacman checks signatures with your system keyring. The required packages are Python and GNU binutils; binutils provides <code>ar</code>, which DebArk uses to read <code>.deb</code> files. No Python packages need to be downloaded from PyPI.
+The installer verifies a signed source release before installing it. It uses OpenSSL for signature checks; if OpenSSL is missing, it first asks pacman for it and can fall back to the Arch package bundle. It then asks pacman to install the remaining required packages through your configured repositories. If those repositories cannot provide them, the installer downloads the current x86_64 package bundle from this project's GitHub Releases. The bundle includes the full dependency closure resolved from Arch's package database, upstream package signatures and checksums; pacman checks those package signatures with your system keyring. Required packages include Python, GNU binutils and OpenSSL. Binutils provides <code>ar</code>, which DebArk uses to read <code>.deb</code> files. No Python packages need to be downloaded from PyPI.
 
 The release bundle is refreshed weekly and the installer refuses a bundle older than 14 days. To avoid a partial upgrade, it also refuses the fallback if a package in the dependency closure is older on the system than in the bundle. Update Arch fully with pacman first, then retry. Installation requires an internet connection to GitHub, pacman, a working Arch keyring and administrator access when installing system packages. The bundle does not replace pacman or make installing Arch packages possible on a non-Arch system. It currently covers x86_64; other architectures use their configured pacman repositories.
 
 The command needs a downloader (<code>curl</code> or <code>wget</code>) to fetch the installer and source archive. It always installs the current version from GitHub, including when you start it from a local checkout. If DebArk is already installed in the selected mode, the installer replaces its program files in place while keeping its settings, registered repositories, package records, snapshots and DebArk cache. An existing installation's mode is selected by default; `debark update` and `debark upgrade` keep that mode when they offer a self-update.
+
+An optional Nuitka standalone build is available for evaluation. It produces a directory of executable and runtime files, not a onefile binary, and does not change the normal source-based installer. See [Building DebArk](docs/BUILDING.md).
 
 <details>
 <summary>Choose where DebArk is installed</summary>
@@ -234,6 +236,6 @@ Only packages that include a usable desktop entry can be added to the menu. Some
 
 ## Project
 
-Maintained by [Mr.Nick (@Mohammad-Nicke)](https://github.com/Mohammad-Nicke). DebArk is released under the [MIT License](LICENSE), with copyright retained by Mr.Nick (Mohammad Nick).
+Maintained by [Mr.Nick (@Mohammad-Nicke)](https://github.com/Mohammad-Nicke). New DebArk material is under the [DebArk Source-Available License 1.0](LICENSE), with copyright retained by Mr.Nick (Mohammad Nick). The license permits use and redistribution only for an unmodified, complete DebArk copy; it does not permit customized forks or reuse of code fragments. DebArk is source-available, not open source. Earlier copies released under MIT remain under their original terms; see [LICENSE-MIT-LEGACY](LICENSE-MIT-LEGACY).
 
 Project guides: [User guide](docs/USER_GUIDE.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Roadmap](ROADMAP.md)

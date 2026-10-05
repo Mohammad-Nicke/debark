@@ -1,0 +1,221 @@
+name: Build signed Nuitka standalone directory
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the Arch Linux x86_64 directory
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/nuitka
+          version="$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' src/debark/__init__.py | head -n 1)"
+          [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env GITHUB_SHA \
+            --env DEBARK_VERSION="$version" \
+            archlinux:latest \
+            bash -lc 'pacman -Syu --noconfirm --needed python nuitka base-devel patchelf && \
+              ./scripts/build-standalone.sh /workspace/dist/nuitka && \
+              cp src/debark/data/debark-release-public.pem /workspace/dist/nuitka/debark.dist/debark-release-public.pem && \
+              python3 scripts/create-release-manifest.py \
+                --root /workspace/dist/nuitka/debark.dist \
+                --root-kind standalone \
+                --commit "$GITHUB_SHA" \
+                --version "$DEBARK_VERSION" \
+                --output /workspace/dist/nuitka/debark.dist/official.manifest && \
+              tar -czf /workspace/dist/debark-standalone-x86_64-unsigned.tar.gz \
+                -C /workspace/dist/nuitka debark.dist'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-standalone-input
+          path: dist/debark-standalone-x86_64-unsigned.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: release-signing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: unsigned-standalone-input
+          path: dist/incoming
+
+      - name: Safely unpack and verify the standalone manifest
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - "$GITHUB_WORKSPACE/dist/incoming/debark-standalone-x86_64-unsigned.tar.gz" "$GITHUB_WORKSPACE/dist/verified" "$GITHUB_SHA" "$EXPECTED_VERSION" <<'PY'
+          import hashlib
+          import re
+          import sys
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          expected_commit, expected_version = sys.argv[3:]
+          root = destination / "debark.dist"
+          destination.mkdir(parents=True, exist_ok=True)
+
+          with tarfile.open(archive, "r:gz") as bundle:
+              members = bundle.getmembers()
+              if not members:
+                  raise SystemExit("The standalone archive is empty.")
+              seen = set()
+              for member in members:
+                  name = PurePosixPath(member.name)
+                  canonical_name = name.as_posix()
+                  if (name.is_absolute() or ".." in name.parts or
+                          not name.parts or name.parts[0] != "debark.dist" or
+                          member.name.rstrip("/") != canonical_name or
+                          canonical_name in seen):
+                      raise SystemExit(f"Unsafe standalone archive path: {member.name}")
+                  seen.add(canonical_name)
+                  if member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
+                      raise SystemExit(f"Unsupported standalone archive entry: {member.name}")
+                  target = destination.joinpath(*name.parts)
+                  if member.isdir():
+                      target.mkdir(parents=True, exist_ok=True)
+                      target.chmod(member.mode & 0o755)
+                  else:
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      source = bundle.extractfile(member)
+                      if source is None:
+                          raise SystemExit(f"Could not read archive entry: {member.name}")
+                      with source, target.open("wb") as output:
+                          while block := source.read(1024 * 1024):
+                              output.write(block)
+                      target.chmod(member.mode & 0o755)
+
+          manifest = root / "official.manifest"
+          rows = manifest.read_text(encoding="utf-8").splitlines()
+          if not rows or rows[0] != "DEBARK-OFFICIAL-MANIFEST 1":
+              raise SystemExit("The standalone manifest has an unsupported format.")
+          metadata = {}
+          files = {}
+          in_files = False
+          for row in rows[1:]:
+              if row == "--files--":
+                  if in_files:
+                      raise SystemExit("The standalone manifest repeats its file section.")
+                  in_files = True
+                  continue
+              if not row:
+                  continue
+              if not in_files:
+                  key, separator, value = row.partition("=")
+                  if not separator or key in metadata:
+                      raise SystemExit("The standalone manifest contains invalid metadata.")
+                  metadata[key] = value
+                  continue
+              digest, separator, name = row.partition("  ")
+              relative = PurePosixPath(name)
+              if (not separator or not re.fullmatch(r"[0-9a-f]{64}", digest) or
+                      not name or any(char.isspace() for char in name) or
+                      relative.is_absolute() or ".." in relative.parts or
+                      relative.as_posix() != name or name in files):
+                  raise SystemExit("The standalone manifest contains an unsafe file entry.")
+              files[name] = digest
+
+          required = {"repository", "commit", "version", "archive_sha256", "root_kind"}
+          if (set(metadata) != required or not in_files or
+                  metadata["repository"] != "https://github.com/Mohammad-Nicke/debark" or
+                  metadata["commit"] != expected_commit or
+                  metadata["version"] != expected_version or
+                  metadata["archive_sha256"] != "none" or
+                  metadata["root_kind"] != "standalone"):
+              raise SystemExit("The standalone manifest does not match this build.")
+
+          actual = set()
+          for path in root.rglob("*"):
+              relative = path.relative_to(root).as_posix()
+              if "__pycache__" in path.parts or path.suffix == ".pyc":
+                  continue
+              if path.is_symlink():
+                  raise SystemExit(f"Unexpected symbolic link in the standalone build: {relative}")
+              if path.is_file() and relative not in {"official.manifest", "official.manifest.sig"}:
+                  actual.add(relative)
+          if actual != set(files):
+              raise SystemExit("The standalone manifest file list does not match its contents.")
+          for name, expected in files.items():
+              digest_state = hashlib.sha256()
+              with root.joinpath(*PurePosixPath(name).parts).open("rb") as source:
+                  for block in iter(lambda: source.read(1024 * 1024), b""):
+                      digest_state.update(block)
+              digest = digest_state.hexdigest()
+              if digest != expected:
+                  raise SystemExit(f"The standalone file does not match its manifest: {name}")
+
+          public_key = root / "debark-release-public.pem"
+          if not public_key.is_file():
+              raise SystemExit("The standalone build is missing its official public key.")
+          print("Standalone manifest and file hashes match the selected main commit.")
+          PY
+
+      - name: Sign and package the standalone directory
+        shell: bash
+        env:
+          DEBARK_RELEASE_PRIVATE_KEY: ${{ secrets.DEBARK_RELEASE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          key_file="$RUNNER_TEMP/debark-release-private.pem"
+          derived_key="$RUNNER_TEMP/debark-derived-public.der"
+          checked_key="$RUNNER_TEMP/debark-checked-public.der"
+          trap 'rm -f "$key_file" "$derived_key" "$checked_key"' EXIT
+          [[ -n "$DEBARK_RELEASE_PRIVATE_KEY" ]] || {
+            printf 'The DEBARK_RELEASE_PRIVATE_KEY Actions secret is not set.\n' >&2
+            exit 1
+          }
+          printf '%s\n' "$DEBARK_RELEASE_PRIVATE_KEY" > "$key_file"
+          chmod 600 "$key_file"
+
+          root=dist/verified/debark.dist
+          public_key="$root/debark-release-public.pem"
+          manifest="$root/official.manifest"
+          signature="$manifest.sig"
+          expected_fingerprint="e6054fe47a50b5eb33c955cac256746abe86c23e3aa4aeaf85216a89918ee55f"
+          actual_fingerprint="$(openssl pkey -pubin -in "$public_key" -outform DER | sha256sum | cut -d ' ' -f 1)"
+          [[ "$actual_fingerprint" = "$expected_fingerprint" ]]
+          openssl pkey -in "$key_file" -pubout -outform DER > "$derived_key"
+          openssl pkey -pubin -in "$public_key" -outform DER > "$checked_key"
+          cmp -s "$derived_key" "$checked_key" || {
+            printf 'The Actions signing key does not match the checked-in public key.\n' >&2
+            exit 1
+          }
+          openssl pkeyutl -sign -inkey "$key_file" -rawin \
+            -in "$manifest" -out "$signature"
+          openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin \
+            -in "$manifest" -sigfile "$signature" >/dev/null
+
+          mkdir -p dist/release
+          tar -czf dist/release/debark-standalone-x86_64.tar.gz \
+            -C dist/verified debark.dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: debark-standalone-x86_64
+          path: dist/release/debark-standalone-x86_64.tar.gz
+          if-no-files-found: error
