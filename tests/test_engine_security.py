@@ -222,5 +222,26 @@ class PackageAndDependencyTests(unittest.TestCase):
             self.assertFalse(marker.exists())
 
 
+class SandboxWrapperTests(unittest.TestCase):
+    def test_sandbox_launcher_blocks_network_and_home_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / "payload"
+            payload.mkdir()
+            app_root = root / "app"
+            executable = app_root / "usr/bin/demo"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            wrapper = root / "bin/demo"
+
+            engine.make_wrapper(wrapper, app_root, executable, object(), payload, sandbox=True)
+            content = wrapper.read_text(encoding="utf-8")
+
+        self.assertIn('firejail --net=none --read-only="$HOME"', content)
+        self.assertIn('bwrap --die-with-parent --unshare-all', content)
+        self.assertIn('--ro-bind "$HOME" "$HOME"', content)
+        self.assertNotIn('--bind "$HOME" "$HOME"', content)
+
+
 if __name__ == "__main__":
     unittest.main()

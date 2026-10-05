@@ -17,7 +17,7 @@ jobs:
     name: Build and publish x86_64 packages
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Prepare output directories
         run: mkdir -p bundle release

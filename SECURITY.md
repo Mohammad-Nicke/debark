@@ -10,7 +10,7 @@ These measures reduce specific installation risks; they do not make an untrusted
 
 - A SHA-256 check proves a package matches the digest supplied by the caller. It does not establish who published the package.
 - Detached signatures are checked only when the caller supplies a keyring they trust. DebArk does not import keys or establish source trust automatically.
-- Applications are not sandboxed by default. The optional Firejail or bubblewrap launcher depends on the local runtime and its policy; do not rely on it as a security boundary for hostile software.
+- Applications are not sandboxed by default. `--sandbox` asks Firejail or bubblewrap to isolate networking, make the home directory read-only, and provide private temporary and device views. The app can still read files in the home directory, and the runtime and kernel must support the requested restrictions; do not rely on it as a security boundary for hostile software.
 - Debian repository definitions are informational. DebArk does not currently fetch APT indexes or verify signed repository metadata.
 - Manifest hashes help detect later file changes; they do not certify that the original package was benign.
 

@@ -118,7 +118,7 @@ Useful install options:
 | <code>--yes</code> | Accept DebArk and pacman prompts without asking |
 | <code>--snapshot</code> | Save a restore point after installation |
 | <code>--verify</code> / <code>--no-verify</code> | Control the post-install file-hash check; verification is on by default |
-| <code>--sandbox</code> | Use an available sandbox launcher; see the explanation below |
+| <code>--sandbox</code> | Disable network access and make the home directory read-only in an available sandbox launcher; see the explanation below |
 | <code>--sha256 HASH</code> | Require an exact package digest |
 | <code>--gpg-signature FILE --keyring FILE</code> | Check a detached signature against a keyring you already trust |
 | <code>--json</code> | Print structured output where supported |
@@ -140,9 +140,9 @@ Run <code>debark update</code> to refresh Arch file-provider data used during de
 <details>
 <summary>What does DebArk's sandbox option do?</summary>
 
-A sandbox is an extra launcher layer that can restrict some of an app's access to the system. With <code>--sandbox</code>, DebArk uses Firejail or bubblewrap if one is already installed. The launcher applies the available runtime's policy when you start the app.
+A sandbox is an extra launcher layer that restricts some of an app's access to the system. With <code>--sandbox</code>, DebArk uses Firejail or bubblewrap if one is already installed. The launcher requests network isolation, keeps the home directory read-only, and gives the app a private temporary directory and device view. The installed runtime and kernel must support these restrictions.
 
-Sandboxing is optional and is not enabled by default. DebArk's current policy is not a dependable security boundary for hostile software, so do not use it as a substitute for trusting the package source. If the app handles sensitive files, review the sandbox setup and runtime policy on your system.
+Sandboxing is optional and is not enabled by default because it can prevent apps from saving settings or reaching the network. The app can still read files in your home directory, and the runtime's policy depends on your system. Treat this as an extra restriction, not a dependable security boundary for hostile software or a substitute for trusting the package source.
 
 </details>
 
@@ -161,6 +161,13 @@ See [feature status](docs/FEATURES.md) for what is implemented and what is still
 <summary>DebArk says a required tool is missing</summary>
 
 The installer downloads <code>dependencies/required-arch.txt</code> from GitHub and asks pacman to install missing packages. If configured repositories cannot supply them, it downloads the current signed package bundle from this repository's Releases. The installer requires an internet connection. If pacman needs administrator access, it uses <code>sudo</code> or <code>doas</code> when available. On Arch, you can also install the listed packages yourself through your normal pacman setup.
+
+</details>
+
+<details>
+<summary>The installer has no terminal</summary>
+
+In a non-interactive run, the installer accepts pacman's normal confirmation prompts automatically. If system packages are missing, it still needs root access or passwordless <code>sudo</code>/<code>doas</code>, because there is no terminal in which to enter a password. Run it from a terminal or start it as root if that access is unavailable.
 
 </details>
 
