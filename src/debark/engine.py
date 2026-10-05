@@ -383,6 +383,25 @@ class UI:
         return f"\033[{code}m{value}\033[0m" if cls.enabled else value
 
 
+def progress(label: str, completed: int, total: int) -> None:
+    """Draw a compact progress bar when output is attached to a terminal."""
+    if not sys.stdout.isatty() or _OUTPUT_QUIET or _OUTPUT_JSON or total <= 0:
+        return
+    ratio = max(0.0, min(1.0, completed / total))
+    columns = shutil.get_terminal_size((80, 24)).columns
+    bar_width = max(10, min(28, columns - len(label) - 22))
+    filled = int(ratio * bar_width)
+    bar = UI.color("█" * filled, "32") + UI.color("░" * (bar_width - filled), "2")
+    percent = int(ratio * 100)
+    print(f"\r{label:<12} {bar} {percent:3d}%  {completed:,}/{total:,}",
+          end="", flush=True)
+
+
+def finish_progress() -> None:
+    if sys.stdout.isatty() and not _OUTPUT_QUIET and not _OUTPUT_JSON:
+        print()
+
+
 def _root_managed_path(path: Path, recursive: bool = False) -> bool:
     """Return whether a system path and its contents are safe to execute as root."""
     absolute = Path(os.path.abspath(path))
@@ -1216,6 +1235,7 @@ def download(url: str, dest: Path, user_mode: bool = False,
     info(f"Downloading {url}")
     fd, temp_name = tempfile.mkstemp(prefix=f".{dest.name}.download-", dir=dest.parent)
     temp_path = Path(temp_name)
+    total = 0
     try:
         with urllib.request.urlopen(url, timeout=45) as response, os.fdopen(fd, "wb") as output:
             os.fchmod(output.fileno(), 0o600)
@@ -1228,20 +1248,24 @@ def download(url: str, dest: Path, user_mode: bool = False,
                 output.write(block)
                 amount += len(block)
                 if total:
-                    print(f"\rDownloaded {fmt_size(amount)} / {fmt_size(total)}", end="", flush=True)
+                    progress("Downloading", amount, total)
             output.flush()
             os.fsync(output.fileno())
         if total:
-            print()
+            finish_progress()
         os.replace(temp_path, dest)
         if user_mode:
             set_user_owner(dest)
     except (urllib.error.URLError, OSError) as exc:
+        if total:
+            finish_progress()
         with contextlib.suppress(OSError):
             os.close(fd)
         temp_path.unlink(missing_ok=True)
         raise DebArkError(f"Download failed: {exc}") from exc
     except Exception:
+        if total:
+            finish_progress()
         with contextlib.suppress(OSError):
             os.close(fd)
         temp_path.unlink(missing_ok=True)
@@ -1342,16 +1366,15 @@ def copy_payload(src: Path, destination: Path, cfg: Config, package: str,
                 errors.append(f"{source}: {exc}")
     total = len(files)
     completed = 0
-    print(f"Copying {total} payload file(s) with {cfg.threads} worker(s)")
+    info(f"Copying {total} payload file(s) with {cfg.threads} worker(s)")
     with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.threads) as executor:
         futures = [executor.submit(copy_one, path) for path in files]
         for future in concurrent.futures.as_completed(futures):
             future.result()
             completed += 1
-            if sys.stdout.isatty():
-                print(f"\r  {completed}/{total}", end="", flush=True)
-    if sys.stdout.isatty() and total:
-        print()
+            progress("Copying", completed, total)
+    if total:
+        finish_progress()
     if errors:
         raise DebArkError("Could not copy package payload: " + "; ".join(errors[:5]))
     for directory in sorted(directories, key=lambda p: len(p.parts), reverse=True):
@@ -2354,9 +2377,100 @@ def _load_repo_indexes(
         fail("No usable synced repository indexes. Add a repository and run `debark repo sync` first.")
     return indexes
 
+
+def _read_upstream_file(url: str, limit: int = 512 * 1024) -> str:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"DebArk/{VERSION} ({REPO})", "Accept": "text/plain"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        payload = response.read(limit + 1)
+    if len(payload) > limit:
+        raise DebArkError("The update metadata is larger than expected.")
+    return payload.decode("utf-8")
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    if not re.fullmatch(r"\d+(?:\.\d+){1,3}", value):
+        raise DebArkError(f"Unsupported DebArk version format: {value}")
+    return tuple(int(part) for part in value.split("."))
+
+
+def _upstream_release_notes(changelog: str, version: str) -> list[str]:
+    heading = re.compile(
+        rf"^##\s+\[?v?{re.escape(version)}\]?(?:\s|$).*?$", re.MULTILINE
+    )
+    match = heading.search(changelog)
+    if match is None:
+        return []
+    following = re.search(r"^##\s+", changelog[match.end():], re.MULTILINE)
+    body = changelog[match.end():match.end() + following.start()
+                     if following else len(changelog)]
+    return [line[2:].strip() for line in body.splitlines()
+            if line.startswith(("- ", "* "))]
+
+
+def _install_upstream_debark(cfg: Config) -> None:
+    if _OUTPUT_JSON:
+        info("Rerun this command without --json to review and approve the DebArk update.")
+        return
+    if not sys.stdin.isatty():
+        info("Run `debark update` in a terminal to approve and install this update.")
+        return
+    if not _ask_yes_no("Install the DebArk update now?", False):
+        info("DebArk update skipped.")
+        return
+
+    installer_url = "https://raw.githubusercontent.com/Mohammad-Nicke/debark/main/install.sh"
+    try:
+        installer_text = _read_upstream_file(installer_url, limit=256 * 1024)
+        if "DEBARK_SELF_UPDATE" not in installer_text or "Mohammad-Nicke/debark" not in installer_text:
+            raise DebArkError("The downloaded installer did not pass its project identity check.")
+        bash = shutil.which("bash")
+        if not bash:
+            raise DebArkError("Bash is required to run the DebArk installer.")
+        with tempfile.TemporaryDirectory(prefix="debark-update-") as temporary:
+            installer = Path(temporary) / "install.sh"
+            installer.write_text(installer_text, encoding="utf-8")
+            os.chmod(installer, 0o700)
+            environment = os.environ.copy()
+            environment["DEBARK_INSTALL_MODE"] = cfg.mode
+            environment["DEBARK_SELF_UPDATE"] = "1"
+            result = subprocess.run([bash, str(installer)], env=environment, check=False)
+        if result.returncode != 0:
+            raise DebArkError(f"The DebArk installer exited with status {result.returncode}.")
+    except (OSError, UnicodeError, urllib.error.URLError) as exc:
+        raise DebArkError(f"Could not download or start the DebArk update: {exc}") from exc
+
+
+def check_debark_update(cfg: Config) -> None:
+    """Check the current GitHub source and offer a same-mode in-place update."""
+    base = "https://raw.githubusercontent.com/Mohammad-Nicke/debark/main"
+    try:
+        init_source = _read_upstream_file(f"{base}/src/debark/__init__.py", limit=64 * 1024)
+        match = re.search(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]\s*$",
+                          init_source, re.MULTILINE)
+        if match is None:
+            raise DebArkError("The upstream source does not declare a DebArk version.")
+        latest = match.group(1)
+        if _version_key(latest) <= _version_key(VERSION):
+            return
+        changelog = _read_upstream_file(f"{base}/CHANGELOG.md")
+    except (OSError, UnicodeError, ValueError, urllib.error.URLError, DebArkError) as exc:
+        warn(f"Could not check for DebArk updates: {exc}")
+        return
+
+    info(f"DebArk {latest} is available (installed: {VERSION}).")
+    notes = _upstream_release_notes(changelog, latest)
+    if notes:
+        section(f"What's new in DebArk {latest}")
+        for note in notes[:12]:
+            print(f"  {UI.color('•', '32')} {note}")
+    else:
+        info("No release notes were found for this version.")
+    _install_upstream_debark(cfg)
+
 def cmd_update(args: argparse.Namespace, cfg: Config) -> None:
-    if cfg.mode == "system" and os.geteuid() != 0:
-        fail("System update requires root.")
     cfg.ensure()
     write_json(cfg.depmap_file, BUILTIN_DEPMAP)
     if cfg.mode == "user":
@@ -2370,6 +2484,7 @@ def cmd_update(args: argparse.Namespace, cfg: Config) -> None:
     if repos:
         print(f"{len(repos)} Debian source definition(s) are registered.")
         print("Use `debark repo sync NAME` to fetch and verify beta APT indexes.")
+    check_debark_update(cfg)
 
 def cmd_upgrade(args: argparse.Namespace, cfg: Config) -> None:
     count = len(load_db(cfg))
@@ -2402,6 +2517,14 @@ def cmd_upgrade(args: argparse.Namespace, cfg: Config) -> None:
             print("No APT-managed DebArk packages are registered for update checks.")
     else:
         print("Automatic upgrades are unavailable; install a newer local package or direct URL explicitly.")
+    check_debark_update(cfg)
+
+
+def _running_from_user_install() -> bool:
+    """Select per-user state automatically for the per-user installed command."""
+    candidate = shutil.which(sys.argv[0]) or sys.argv[0]
+    invoked_path = Path(candidate).expanduser().absolute()
+    return invoked_path == current_user_home() / ".local/bin/debark"
 
 
 def _require_experimental(cfg: Config) -> None:
@@ -3528,7 +3651,7 @@ def main() -> int:
             parser.error(f"unknown help topic: {args.topic}")
         print(HELP_TEXT)
         return 0
-    cfg = Config(force_user=getattr(args, "user", False))
+    cfg = Config(force_user=(getattr(args, "user", False) or _running_from_user_install()))
     if getattr(args, "threads", None) is not None:
         cfg.threads = max(1, min(16, args.threads))
     UI.setup(cfg.colors and not getattr(args, "no_color", False))

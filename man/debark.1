@@ -1,4 +1,4 @@
-.TH DEBARK 1 "October 2026" "DebArk 0.1" "User Commands"
+.TH DEBARK 1 "October 2026" "DebArk 0.1.1" "User Commands"
 .SH NAME
 debark \- install Debian packages on Arch Linux
 .SH SYNOPSIS
@@ -40,8 +40,11 @@ Search or inspect packages in already-synced experimental Debian indexes.
 .B cve --suite SUITE
 Compare installed Debian packages with Debian Security Tracker data. Experimental.
 .TP
+.B update
+Refresh local dependency metadata and pacman's file-provider database, then check for a DebArk update. If one is available, show its changelog notes and ask before installing it.
+.TP
 .B upgrade
-Show newer versions available in already-synced experimental APT indexes. Does not replace installed apps.
+Show newer versions available in already-synced experimental APT indexes, then check for a DebArk update. App versions are not replaced automatically; a DebArk update is offered separately.
 .B upgrade also accepts the pacman-style -Qu shortcut. update accepts -Fy.
 .SH OPTIONS
 .TP
@@ -92,4 +95,4 @@ Maintained by Mr.Nick (Mohammad-Nicke).
 .PP
 Repository: https://github.com/Mohammad-Nicke/debark
 .SH LICENSE
-Released into the public domain under the Unlicense. See the UNLICENSE file in the project repository.
+Copyright (c) 2026 Mr.Nick (Mohammad Nick). Distributed under the MIT License; see LICENSE in the project repository.

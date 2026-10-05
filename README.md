@@ -4,8 +4,8 @@
 
 **Run Debian apps on Arch Linux, without spreading their files across the system.**
 
-[![Version](https://img.shields.io/github/v/tag/Mohammad-Nicke/debark?label=version)](https://github.com/Mohammad-Nicke/debark/tags)
-[![License](https://img.shields.io/github/license/Mohammad-Nicke/debark)](UNLICENSE)
+[![Source version](https://img.shields.io/badge/source-0.1.1-blue)](CHANGELOG.md)
+[![License](https://img.shields.io/github/license/Mohammad-Nicke/debark)](LICENSE)
 [![CI](https://github.com/Mohammad-Nicke/debark/actions/workflows/ci.yml/badge.svg)](https://github.com/Mohammad-Nicke/debark/actions/workflows/ci.yml)
 
 </div>
@@ -32,7 +32,7 @@ The installer always downloads the current source and required-package list from
 
 The release bundle is refreshed weekly and the installer refuses a bundle older than 14 days. To avoid a partial upgrade, it also refuses the fallback if a package in the dependency closure is older on the system than in the bundle. Update Arch fully with pacman first, then retry. Installation requires an internet connection to GitHub, pacman, a working Arch keyring and administrator access when installing system packages. The bundle does not replace pacman or make installing Arch packages possible on a non-Arch system. It currently covers x86_64; other architectures use their configured pacman repositories.
 
-The command needs a downloader (<code>curl</code> or <code>wget</code>) to fetch the installer and source archive. It always installs the current version from GitHub, including when you start it from a local checkout.
+The command needs a downloader (<code>curl</code> or <code>wget</code>) to fetch the installer and source archive. It always installs the current version from GitHub, including when you start it from a local checkout. If DebArk is already installed in the selected mode, the installer replaces its program files in place while keeping its settings, registered repositories, package records, snapshots and DebArk cache. An existing installation's mode is selected by default; `debark update` and `debark upgrade` keep that mode when they offer a self-update.
 
 <details>
 <summary>Choose where DebArk is installed</summary>
@@ -157,7 +157,7 @@ Other commands include <code>extract</code> and <code>convert</code> for working
 
 DebArk compares Debian dependency names with a built-in map, locally configured overrides, installed Arch packages and pacman's file-provider data. It can also inspect ELF library requirements with <code>readelf</code>. The built-in map is intentionally cautious: similar names alone are not enough to trigger an automatic install.
 
-Run <code>debark update</code> to refresh Arch file-provider data used during dependency checks. This does not update installed Debian apps.
+Run <code>debark update</code> to refresh Arch file-provider data and DebArk's built-in dependency map. It also checks the version of DebArk itself. When the installed version is current, the self-check stays quiet. When a newer version is available, DebArk shows its changelog notes and asks before reinstalling the program files in the same mode. Its preferences, repository list and DebArk cache are kept.
 
 <details>
 <summary>Try the experimental APT and security tools</summary>
@@ -178,7 +178,7 @@ debark upgrade
 
 The APT preview accepts HTTPS repositories only. It verifies the signed <code>Release</code> file with <code>gpgv</code>, checks index hashes and sizes from that file, and verifies the downloaded package against its indexed SHA256. Search and info use the most recently synced, unexpired indexes and do not contact the network. You must obtain and trust the keyring yourself; DebArk does not import keys or decide which publishers to trust. A missing <code>gpgv</code> command requires the Arch <code>gnupg</code> package.
 
-The CVE command compares saved Debian package versions with tracker data for the suite you name. It can report uncertain results; check each advisory with Debian before acting. <code>debark upgrade</code> only lists newer versions from already-synced indexes. Replacing an installed package is not part of this beta preview yet.
+The CVE command compares saved Debian package versions with tracker data for the suite you name. It can report uncertain results; check each advisory with Debian before acting. <code>debark upgrade</code> lists newer app versions from already-synced indexes (it does not replace those apps), then also checks DebArk itself and offers an update when one is available. A DebArk self-update replaces the tool, not your installed Debian apps.
 
 </details>
 
@@ -234,6 +234,6 @@ Only packages that include a usable desktop entry can be added to the menu. Some
 
 ## Project
 
-Maintained by [Mr.Nick (@Mohammad-Nicke)](https://github.com/Mohammad-Nicke). DebArk is released under the [Unlicense](UNLICENSE).
+Maintained by [Mr.Nick (@Mohammad-Nicke)](https://github.com/Mohammad-Nicke). DebArk is released under the [MIT License](LICENSE), with copyright retained by Mr.Nick (Mohammad Nick).
 
-Project guides: [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Roadmap](ROADMAP.md)
+Project guides: [User guide](docs/USER_GUIDE.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Roadmap](ROADMAP.md)

@@ -290,18 +290,56 @@ printf '%sMaintainer: %s%s\n' "$C_DIM" "$MAINTAINER" "$C_RESET"
 printf '%sProject: %s%s\n' "$C_DIM" "$REPO_URL" "$C_RESET"
 printf '1) System-wide: /usr/local/bin (requires root, sudo, or doas)\n'
 printf '2) Current user: ~/.local/bin\n'
+
+DETECTED_USER_HOME="$HOME"
+if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    DETECTED_USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    [ -n "$DETECTED_USER_HOME" ] || die "Could not find the invoking user's home directory."
+fi
+
+SYSTEM_INSTALL_PRESENT="false"
+USER_INSTALL_PRESENT="false"
+if [ -x /usr/local/bin/debark ] && [ -d /usr/local/lib/debark ]; then
+    SYSTEM_INSTALL_PRESENT="true"
+fi
+if [ -x "$DETECTED_USER_HOME/.local/bin/debark" ] && \
+    [ -d "$DETECTED_USER_HOME/.local/lib/debark" ]; then
+    USER_INSTALL_PRESENT="true"
+fi
+
 DEFAULT_MODE="1"
-if [ ! -t 3 ] && [ "$EUID" -ne 0 ]; then DEFAULT_MODE="2"; fi
-MODE="$(ask_value 'Choose installation mode (1 or 2)' "$DEFAULT_MODE")"
+if [ "$SYSTEM_INSTALL_PRESENT" = "false" ] && [ "$USER_INSTALL_PRESENT" = "true" ]; then
+    DEFAULT_MODE="2"
+elif [ ! -t 3 ] && [ "$EUID" -ne 0 ] && \
+    [ "$SYSTEM_INSTALL_PRESENT" = "false" ]; then
+    DEFAULT_MODE="2"
+fi
+
+case "${DEBARK_INSTALL_MODE:-}" in
+    system) MODE="1" ;;
+    user) MODE="2" ;;
+    "")
+        if [ "${DEBARK_SELF_UPDATE:-0}" = "1" ]; then
+            MODE="$DEFAULT_MODE"
+        else
+            MODE="$(ask_value 'Choose installation mode (1 or 2)' "$DEFAULT_MODE")"
+        fi
+        ;;
+    *) die "Invalid requested installation mode: $DEBARK_INSTALL_MODE" ;;
+esac
 case "$MODE" in
     1) INSTALL_MODE="system" ;;
     2) INSTALL_MODE="user" ;;
     *) die "Choose 1 or 2." ;;
 esac
+if [ "${DEBARK_SELF_UPDATE:-0}" = "1" ]; then
+    printf 'Updating the existing %s installation. Preferences, repository definitions, and DebArk caches will be kept.\n' \
+        "$INSTALL_MODE"
+fi
 
 EXPERIMENTAL_FEATURES="false"
 EXPERIMENTAL_PROMPTED="false"
-if [ -t 3 ]; then
+if [ -t 3 ] && [ "${DEBARK_SELF_UPDATE:-0}" != "1" ]; then
     printf '\n%sExperimental preview%s: signed APT sync/install, Debian CVE review and update checks.\n' "$C_CYAN" "$C_RESET"
     printf 'These features are beta, may be incomplete or fail, and do not automatically replace installed apps.\n'
     if ask_yes_no "Enable the experimental preview?" "n"; then
@@ -336,7 +374,7 @@ if [ "$INSTALL_MODE" = "system" ]; then
     FISH_COMPLETION_DIR="/usr/local/share/fish/vendor_completions.d"
     MAN_DIR="/usr/local/share/man/man1"
 else
-    USER_HOME="$HOME"
+    USER_HOME="$DETECTED_USER_HOME"
     if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
         USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
         [ -n "$USER_HOME" ] || die "Could not find the invoking user's home directory."
@@ -356,7 +394,7 @@ fi
 AUTO_YES="false"
 COLORS="true"
 THREADS="4"
-if [ -t 3 ]; then
+if [ -t 3 ] && [ "${DEBARK_SELF_UPDATE:-0}" != "1" ]; then
     if ask_yes_no "Auto-confirm DebArk prompts by default?" "n"; then AUTO_YES="true"; fi
     if ask_yes_no "Enable colored output?" "y"; then COLORS="true"; else COLORS="false"; fi
     THREADS="$(ask_value 'Copy workers (1-16)' '4')"
@@ -388,6 +426,23 @@ for target in "$BIN_DIR/debark" "$LIB_DIR/debark" \
     fi
 done
 
+TARGET_VERSION="$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' \
+    "$SOURCE_DIR/src/debark/__init__.py" | head -n 1)"
+[ -n "$TARGET_VERSION" ] || die "Could not read the version from the downloaded DebArk source."
+if [ -d "$LIB_DIR/debark" ] && [ ! -L "$LIB_DIR/debark" ] && \
+    [ -f "$LIB_DIR/debark/__init__.py" ] && [ ! -L "$LIB_DIR/debark/__init__.py" ]; then
+    OLD_VERSION="$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' \
+        "$LIB_DIR/debark/__init__.py" | head -n 1)"
+    if [ -n "$OLD_VERSION" ]; then
+        printf 'Existing DebArk %s found; replacing it with %s.\n' "$OLD_VERSION" "$TARGET_VERSION"
+    else
+        printf 'Existing DebArk installation found; replacing its program files.\n'
+    fi
+elif [ -e "$BIN_DIR/debark" ]; then
+    printf 'Existing DebArk command found; replacing the managed program files with %s.\n' \
+        "$TARGET_VERSION"
+fi
+
 run_privileged mkdir -p "$BIN_DIR" "$LIB_DIR" "$CFG_DIR" "$DATA_DIR/cache" "$DATA_DIR/pkgs"
 
 MODULE_STAGE="$LIB_DIR/.debark.new.$$"
@@ -411,7 +466,13 @@ else
     fi
     die "Could not install DebArk's Python modules."
 fi
-run_privileged install -m 755 "$SOURCE_DIR/debark" "$BIN_DIR/debark"
+ENTRYPOINT_STAGE="$BIN_DIR/.debark.new.$$"
+run_privileged rm -f -- "$ENTRYPOINT_STAGE"
+run_privileged install -m 755 "$SOURCE_DIR/debark" "$ENTRYPOINT_STAGE"
+if ! run_privileged mv -fT -- "$ENTRYPOINT_STAGE" "$BIN_DIR/debark"; then
+    run_privileged rm -f -- "$ENTRYPOINT_STAGE"
+    die "Could not replace the DebArk command."
+fi
 run_privileged install -Dm 644 "$SOURCE_DIR/completions/debark.bash" \
     "$BASH_COMPLETION_DIR/debark"
 run_privileged install -Dm 644 "$SOURCE_DIR/completions/_debark" \
