@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "maintainer": "Master Nick (@Mohammad-Nicke)",
+    "repository": "https://github.com/Mohammad-Nicke/debark",
+    "license": "Unlicense"
+  },
+  "max_model_bytes": 20971520,
+  "minimum_suggestion_score": 0.34,
+  "weights": {
+    "exact": 1.0,
+    "token_overlap": 0.42,
+    "trigram_overlap": 0.38,
+    "prefix_match": 0.2
+  },
+  "stop_tokens": ["lib", "linux", "gnu", "common", "data", "bin", "runtime", "the"]
+}

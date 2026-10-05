@@ -1,0 +1,119 @@
+name: Refresh Arch dependency bundle
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 * * 1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: arch-dependency-bundle
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish x86_64 packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare output directories
+        run: mkdir -p bundle release
+
+      - name: Download current Arch packages
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE/bundle:/bundle" \
+            --volume "$GITHUB_WORKSPACE/release:/release" \
+            --volume "$GITHUB_WORKSPACE/dependencies/required-arch.txt:/manifest/required-arch.txt:ro" \
+            archlinux:latest \
+            bash -Eeuo pipefail -c '
+              pacman -Syu --noconfirm pacman-contrib
+
+              required=()
+              while IFS= read -r package || [[ -n "$package" ]]; do
+                package="${package%%#*}"
+                package="${package//[[:space:]]/}"
+                [[ -n "$package" ]] || continue
+                [[ "$package" =~ ^[A-Za-z0-9@._+-]+$ ]] || {
+                  printf "Invalid package name in required-arch.txt: %s\\n" "$package" >&2
+                  exit 1
+                }
+                required+=("$package")
+              done < /manifest/required-arch.txt
+              ((${#required[@]} > 0)) || {
+                printf "No required packages are listed.\\n" >&2
+                exit 1
+              }
+
+              : > /tmp/debark-dependencies.txt
+              for package in "${required[@]}"; do
+                pactree --sync --unique "$package" >> /tmp/debark-dependencies.txt
+              done
+              mapfile -t dependency_names < <(sort -u /tmp/debark-dependencies.txt)
+              ((${#dependency_names[@]} > 0)) || {
+                printf "Could not resolve the dependency closure.\\n" >&2
+                exit 1
+              }
+              pacman -Sp --print-format "%n" "${dependency_names[@]}" \
+                > /tmp/debark-packages.txt
+              mapfile -t packages_to_download < /tmp/debark-packages.txt
+              ((${#packages_to_download[@]} > 0)) || {
+                printf "Could not map dependencies to Arch packages.\\n" >&2
+                exit 1
+              }
+              pacman -Sw --noconfirm --cachedir /bundle "${packages_to_download[@]}"
+
+              shopt -s nullglob
+              packages=(/bundle/*.pkg.tar.zst)
+              ((${#packages[@]} > 0)) || {
+                printf "pacman did not download any packages.\\n" >&2
+                exit 1
+              }
+
+              for package in "${packages[@]}"; do
+                [[ -f "${package}.sig" ]] || {
+                  printf "Missing Arch signature for %s.\\n" "${package##*/}" >&2
+                  exit 1
+                }
+              done
+
+              cat > /bundle/manifest.txt <<EOF
+          format=1
+          maintainer=Master Nick (@Mohammad-Nicke)
+          repository=https://github.com/Mohammad-Nicke/debark
+          architecture=x86_64
+          generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          base=archlinux:latest
+          required=${required[*]}
+          EOF
+
+              (cd /bundle && sha256sum -- *.pkg.tar.zst *.pkg.tar.zst.sig > SHA256SUMS)
+              bundle_files=(/bundle/*.pkg.tar.zst /bundle/*.pkg.tar.zst.sig)
+              names=()
+              for file in "${bundle_files[@]}"; do names+=("${file##*/}"); done
+              tar -czf /release/debark-arch-dependencies-x86_64.tar.gz \
+                -C /bundle manifest.txt SHA256SUMS "${names[@]}"
+            '
+
+      - name: Publish rolling release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_file="$GITHUB_WORKSPACE/release/debark-arch-dependencies-x86_64.tar.gz"
+          notes="Current x86_64 Arch Linux package files for the complete dependency closure of DebArk's required packages. Includes upstream Arch signatures and a SHA-256 manifest. Refreshed weekly. Keep the system keyring current; pacman verifies the package signatures during installation."
+
+          if gh release view arch-dependencies --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload arch-dependencies "$release_file" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit arch-dependencies --repo "$GITHUB_REPOSITORY" \
+              --title "DebArk Arch dependency bundle (x86_64)" \
+              --notes "$notes" --prerelease
+          else
+            gh release create arch-dependencies "$release_file" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "DebArk Arch dependency bundle (x86_64)" \
+              --notes "$notes" --prerelease --target "$GITHUB_SHA"
+          fi

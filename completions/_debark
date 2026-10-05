@@ -1,0 +1,27 @@
+#compdef debark
+# DebArk Zsh completion · Master Nick (@Mohammad-Nicke)
+# https://github.com/Mohammad-Nicke/debark
+
+_arguments -C \
+  '(-h --help)'{-h,--help}'[Show help]' \
+  '--version[Show version]' \
+  '(-u --user)'{-u,--user}'[Use user paths]' \
+  '--json[Emit JSON where supported]' \
+  '--quiet[Suppress informational output]' \
+  '--verbose[Show diagnostic details]' \
+  '--threads=[Copy workers]:count:' \
+  '1:command:((install\:Install remove\:Remove list\:List search\:Search info\:Info files\:Files verify\:Verify scan\:Scan update\:Update upgrade\:Upgrade config\:Config doctor\:Doctor repo\:Repository repair\:Repair gc\:Cleanup log\:Log stats\:Statistics snapshot\:Snapshot rollback\:Rollback extract\:Extract convert\:Convert export\:Export import\:Import bulk\:Bulk watch\:Watch profile\:Profile plugin\:Plugins pin\:Pin license\:Licenses help\:Help about\:About))' \
+  '*::argument:->args'
+
+case "$words[2]" in
+  install|info|extract|convert) _files -g '*.deb' ;;
+  remove|verify|files|repair|snapshot|rollback|license)
+    local -a mode_args package_names
+    local output
+    mode_args=()
+    if (( ${words[(Ie)--user]} || ${words[(Ie)-u]} )); then mode_args=(--user); fi
+    output="$(DEBARK_COMPLETION=1 command debark "${mode_args[@]}" list --json 2>/dev/null)"
+    package_names=("${(@f)$(print -r -- "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(p["name"] for p in d.get("packages", [])))' 2>/dev/null)}")
+    _describe 'package' package_names
+    ;;
+esac

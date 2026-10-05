@@ -1,0 +1,3 @@
+# Required Arch packages. The installer uses pacman or the current signed release bundle.
+python
+binutils

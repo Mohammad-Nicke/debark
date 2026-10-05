@@ -1,0 +1,81 @@
+.TH DEBARK 1 "October 2026" "DebArk 0.1" "User Commands"
+.SH NAME
+debark \- install Debian packages on Arch Linux
+.SH SYNOPSIS
+.B debark
+.RI [ global-options ]
+.RI command
+.RI [ options ]
+.SH DESCRIPTION
+DebArk safely extracts Debian package payloads into per-package application directories on Arch Linux. It does not execute Debian maintainer scripts and does not copy package payload into system library directories.
+.SH COMMANDS
+.TP
+.B install PACKAGE.deb|URL
+Analyze and install a local Debian package or direct HTTP(S) URL.
+.TP
+.B remove PACKAGE
+Remove unchanged files registered to a DebArk package.
+.TP
+.B list, info, search, files, verify
+Inspect managed packages and package contents.
+.TP
+.B repair PACKAGE
+Restore damaged application payload files from the recorded source package.
+.TP
+.B snapshot PACKAGE
+Save the current managed application tree as a local restore point.
+.TP
+.B rollback PACKAGE [SNAPSHOT]
+Restore a saved application tree.
+.TP
+.B repo add|remove|list
+Manage local Debian source definitions. This does not enable APT or install packages from those sources.
+.SH OPTIONS
+.TP
+.BR -u , " --user"
+Use per-user paths. Without this option, system mode is used. A trusted system installation requests access through sudo or doas when needed.
+.TP
+.BR -y , " --yes"
+Skip DebArk confirmation prompts.
+.TP
+.B --dry-run
+Show the planned install without changing the system.
+.TP
+.B --no-deps
+Skip installing mapped Arch dependencies.
+.TP
+.B --snapshot
+Save a local restore point after a successful install.
+.TP
+.B --sandbox
+Use an available sandbox runtime for generated launchers.
+.TP
+.B --threads N
+Set the parallel file-copy worker count from 1 through 16.
+.TP
+.B --json
+Request JSON output for commands that support it.
+.TP
+.BR -q , " --quiet"
+Suppress informational output where supported.
+.TP
+.BR -v , " --verbose"
+Show diagnostic details where supported.
+.SH SAFETY
+Debian maintainer scripts are never executed. Removal keeps files whose contents changed. Applications are not sandboxed unless the install used --sandbox and a supported runtime is available. Review package sources before installation.
+.SH FILES
+.TP
+.I /var/lib/debark/db.json
+System package database.
+.TP
+.I /var/lib/debark/pkgs/
+Per-package manifests and saved source packages.
+.SH SEE ALSO
+.BR pacman (8),
+.BR ar (1)
+.SH PROJECT
+Maintained by Master Nick (Mohammad-Nicke).
+.PP
+Repository: https://github.com/Mohammad-Nicke/debark
+.SH LICENSE
+Released into the public domain under the Unlicense. See the UNLICENSE file in the project repository.
