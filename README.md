@@ -92,6 +92,7 @@ These are the commands most people need:
 debark list
 debark search QUERY
 debark info app.deb
+debark info APP
 debark verify APP
 debark repair APP
 debark remove APP
@@ -125,6 +126,29 @@ Useful install options:
 
 For the full command list, run <code>debark --help</code> or read <code>man debark</code>.
 
+<details>
+<summary>Prefer pacman or Debian command shortcuts?</summary>
+
+Use the full DebArk command or a familiar single-action shortcut:
+
+| Full command | Shortcut | Action |
+| --- | --- | --- |
+| <code>debark install FILE.deb</code> | <code>debark -S FILE.deb</code> or <code>debark -i FILE.deb</code> | Inspect and install a package |
+| <code>debark remove APP</code> | <code>debark -R APP</code> or <code>debark -r APP</code> | Remove a DebArk app |
+| <code>debark list</code> | <code>debark -Q</code> or <code>debark -l</code> | List installed DebArk apps |
+| <code>debark search TEXT</code> | <code>debark -Qs TEXT</code> | Search installed apps |
+| <code>debark files APP</code> | <code>debark -Ql APP</code> or <code>debark -L APP</code> | List an app's managed files |
+| <code>debark info APP</code> | <code>debark -Qi APP</code> or <code>debark -s APP</code> | Show installed app details |
+| <code>debark verify APP</code> | <code>debark -Qk APP</code> or <code>debark -V APP</code> | Check managed file hashes |
+| <code>debark update</code> | <code>debark -Fy</code> | Refresh Arch file-provider data |
+| <code>debark upgrade</code> | <code>debark -Qu</code> | Check newer versions in synced beta indexes |
+| <code>debark repo search TEXT</code> | <code>debark -Ss TEXT</code> | Search synced Debian indexes |
+| <code>debark repo info APP</code> | <code>debark -Si APP</code> | Show details from synced Debian indexes |
+
+The Debian-style <code>-i</code>, <code>-r</code>, <code>-l</code>, <code>-L</code> and <code>-s</code> forms are accepted alongside the Arch-style forms. Repository search and details use only indexes you have already synced. These shortcuts each run one DebArk action; combined pacman operations such as <code>-Syu</code> do not update Arch itself.
+
+</details>
+
 Other commands include <code>extract</code> and <code>convert</code> for working with package files, <code>bulk</code> and <code>watch</code> for handling several packages, and <code>profile</code> for saving TUI preferences.
 
 </details>
@@ -145,12 +169,14 @@ If you skipped the prompt, enable the preview with <code>debark config experimen
 ~~~sh
 debark repo add debian https://deb.debian.org/debian bookworm main --keyring /path/to/trusted-archive-keyring.gpg
 debark repo sync debian
+debark repo search browser --repo debian
+debark repo info PACKAGE --repo debian
 debark repo install debian PACKAGE [--sandbox]
 debark cve --suite bookworm
 debark upgrade
 ~~~
 
-The APT preview accepts HTTPS repositories only. It verifies the signed <code>Release</code> file with <code>gpgv</code>, checks index hashes and sizes from that file, and verifies the downloaded package against its indexed SHA256. You must obtain and trust the keyring yourself; DebArk does not import keys or decide which publishers to trust. A missing <code>gpgv</code> command requires the Arch <code>gnupg</code> package.
+The APT preview accepts HTTPS repositories only. It verifies the signed <code>Release</code> file with <code>gpgv</code>, checks index hashes and sizes from that file, and verifies the downloaded package against its indexed SHA256. Search and info use the most recently synced, unexpired indexes and do not contact the network. You must obtain and trust the keyring yourself; DebArk does not import keys or decide which publishers to trust. A missing <code>gpgv</code> command requires the Arch <code>gnupg</code> package.
 
 The CVE command compares saved Debian package versions with tracker data for the suite you name. It can report uncertain results; check each advisory with Debian before acting. <code>debark upgrade</code> only lists newer versions from already-synced indexes. Replacing an installed package is not part of this beta preview yet.
 

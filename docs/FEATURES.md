@@ -54,10 +54,12 @@ The sandbox option adds a launcher that uses an already-installed bubblewrap or 
 | CVE scan | Experimental opt-in; compares installed Debian versions to Debian Security Tracker data for a selected suite |
 | Debian source definition management | Saved locally; HTTPS only for experimental sync |
 | Signed APT index sync and new-package install | Experimental opt-in; detached Release signature, signed SHA256/size checks, and x86_64/amd64 only |
+| Search and inspect Debian repository packages | Experimental opt-in; works from synced, unexpired indexes without a network request |
+| Package-manager command shortcuts | Common pacman and dpkg forms for install, remove, list, search, info, files, verify and update checks |
 | Desktop entries and launch wrappers | Implemented; existing destinations are not replaced |
 | MIME, DBus, systemd, udev, cron and Polkit registration | Deferred |
 
-`update` refreshes Arch file-provider data used by dependency checks. `upgrade` can detect newer versions from experimental indexes, but it does not replace installed apps. All APT and CVE features are opt-in beta and may fail.
+`update` refreshes Arch file-provider data used by dependency checks. `upgrade` can detect newer versions from experimental indexes, but it does not replace installed apps. Repository search and info also use only indexes already synced by the user. All APT and CVE features are opt-in beta and may fail.
 
 ## Hosted and community capabilities
 
