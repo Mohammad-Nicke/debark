@@ -52,6 +52,46 @@ SYSTEM_ACCESS_COMMANDS = frozenset({
     "rollback", "export", "import", "bulk", "watch", "profile", "plugin", "pin",
     "license",
 })
+COMMAND_NAMES = frozenset({
+    "install", "remove", "list", "search", "info", "files", "verify", "scan",
+    "update", "upgrade", "config", "doctor", "repo", "cve", "repair", "gc",
+    "log", "stats", "snapshot", "rollback", "extract", "convert", "export",
+    "import", "bulk", "watch", "profile", "plugin", "pin", "license", "help",
+    "about",
+})
+COMMAND_SHORTCUTS = {
+    "-S": ("install",), "-i": ("install",),
+    "-R": ("remove",), "-r": ("remove",),
+    "-Q": ("list",), "-l": ("list",),
+    "-Qs": ("search",), "-Ss": ("repo", "search"),
+    "-Qi": ("info",), "-s": ("info",), "-Si": ("repo", "info"),
+    "-Ql": ("files",), "-L": ("files",),
+    "-Qk": ("verify",), "-V": ("verify",),
+    "-Fy": ("update",), "-Qu": ("upgrade",),
+}
+
+
+def normalize_command_shortcuts(argv: list[str]) -> list[str]:
+    """Expand common pacman and dpkg operation shortcuts into DebArk commands."""
+    normalized = list(argv)
+    index = 0
+    while index < len(normalized):
+        token = normalized[index]
+        if token in {"--threads", "--profile"}:
+            index += 2
+            continue
+        if token.startswith(("--threads=", "--profile=")):
+            index += 1
+            continue
+        if token in COMMAND_NAMES:
+            return normalized
+        shortcut = COMMAND_SHORTCUTS.get(token)
+        if shortcut:
+            return normalized[:index] + list(shortcut) + normalized[index + 1:]
+        index += 1
+    return normalized
+
+
 PROTECTED_ARCH_PACKAGES = {
     "glibc", "gcc-libs", "openssl", "systemd", "systemd-libs", "dbus",
     "util-linux", "libxcrypt", "linux", "linux-lts", "pacman", "filesystem",
@@ -2068,9 +2108,15 @@ def cmd_list(args: argparse.Namespace, cfg: Config) -> None:
         print(f"{name:<28} {entry.get('version', '?'):<24} {installed}")
 
 def cmd_info(args: argparse.Namespace, cfg: Config) -> None:
-    path = Path(args.deb).expanduser().resolve()
-    if not path.is_file():
-        fail(f"Package file not found: {path}")
+    candidate = Path(args.deb).expanduser()
+    if not candidate.is_file():
+        if PACKAGE_NAME.fullmatch(args.deb):
+            entry = load_db(cfg).get(args.deb)
+            if entry:
+                _print_installed_info(args.deb, entry)
+                return
+        fail(f"Package file or installed DebArk package not found: {candidate}")
+    path = candidate.resolve()
     with tempfile.TemporaryDirectory(prefix="debark-info-") as temp_name:
         control, data = extract_deb(path, Path(temp_name))
         package = control.get("Package", path.stem)
@@ -2099,6 +2145,25 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> None:
         return
     for name, entry in sorted(hits):
         print(f"{name}\t{entry.get('version', '?')}")
+
+
+def _print_installed_info(package: str, entry: dict[str, Any]) -> None:
+    header(f"Installed package: {package}")
+    print(f"Version: {entry.get('version', '?')}")
+    print(f"Architecture: {entry.get('architecture', '?')}")
+    print(f"Installed: {entry.get('installed_at', '?')}")
+    print(f"Source: {entry.get('source_url') or entry.get('source_deb') or '?'}")
+    licenses = entry.get("license", [])
+    if isinstance(licenses, str):
+        licenses = [licenses]
+    print(f"License: {'; '.join(str(item) for item in licenses) if licenses else '?'}")
+    files = manifest_files(entry)
+    print(f"Managed files: {len(files)}")
+    arch_deps = entry.get("arch_deps", [])
+    if isinstance(arch_deps, list):
+        print(f"Arch dependencies: {', '.join(str(item) for item in arch_deps) or 'none recorded'}")
+    if entry.get("apt_repository"):
+        print(f"APT repository: {entry['apt_repository']} ({entry.get('apt_suite', '?')})")
 
 def cmd_files(args: argparse.Namespace, cfg: Config) -> None:
     entry = load_db(cfg).get(args.package)
@@ -2256,6 +2321,39 @@ def cmd_scan(args: argparse.Namespace, cfg: Config) -> None:
         for package, count in sorted(found.items()):
             print(f"{package}: {count} file(s)")
 
+
+def _load_repo_index(cfg: Config, repos: dict[str, Any], name: str) -> dict[str, Any]:
+    definition = repos.get(name)
+    if not isinstance(definition, dict):
+        raise experimental.ExperimentalError(f"Repository not found: {name}")
+    index = experimental.load_synced_packages(cfg.cache_dir, name)
+    configured_url = str(definition.get("url", "")).rstrip("/")
+    if (index.get("url") != configured_url
+            or index.get("suite") != definition.get("suite")):
+        raise experimental.ExperimentalError(
+            f"Cached index for {name} does not match its current settings; run debark repo sync {name}."
+        )
+    return index
+
+
+def _load_repo_indexes(
+    cfg: Config, repos: dict[str, Any], name: str | None = None
+) -> dict[str, dict[str, Any]]:
+    if name is not None and name not in repos:
+        fail(f"Repository not found: {name}")
+    selected = [name] if name else sorted(repos)
+    if not selected:
+        fail("No Debian repositories are registered.")
+    indexes: dict[str, dict[str, Any]] = {}
+    for repo_name in selected:
+        try:
+            indexes[repo_name] = _load_repo_index(cfg, repos, repo_name)
+        except experimental.ExperimentalError as exc:
+            warn(str(exc))
+    if not indexes:
+        fail("No usable synced repository indexes. Add a repository and run `debark repo sync` first.")
+    return indexes
+
 def cmd_update(args: argparse.Namespace, cfg: Config) -> None:
     if cfg.mode == "system" and os.geteuid() != 0:
         fail("System update requires root.")
@@ -2289,7 +2387,7 @@ def cmd_upgrade(args: argparse.Namespace, cfg: Config) -> None:
             if not isinstance(repo_name, str) or repo_name not in repos:
                 continue
             try:
-                index = experimental.load_synced_packages(cfg.cache_dir, repo_name)
+                index = _load_repo_index(cfg, repos, repo_name)
                 candidate = experimental.newest_package(index["packages"], package)
                 if candidate and experimental.compare_debian_versions(
                     candidate["Version"], str(entry.get("version", "0"))
@@ -2317,6 +2415,11 @@ def cmd_cve(args: argparse.Namespace, cfg: Config) -> None:
         fail("Provide a valid Debian suite, such as bookworm or trixie.")
     try:
         tracker = experimental.fetch_tracker(cfg.cache_dir / "debian-security-tracker.json")
+        known_suites = experimental.tracker_suites(tracker)
+        if args.suite not in known_suites:
+            examples = ", ".join(sorted(known_suites)[:12])
+            suffix = f" Known suites in the current tracker data: {examples}." if examples else ""
+            fail(f"No tracker data is published for suite {args.suite!r}; check the suite name.{suffix}")
         findings = experimental.package_cves(load_db(cfg), tracker, args.suite)
     except experimental.ExperimentalError as exc:
         fail(str(exc))
@@ -2357,6 +2460,24 @@ def cmd_pin(args: argparse.Namespace, cfg: Config) -> None:
     ok(f"{'Cleared' if args.clear else 'Pinned'} {args.package}" +
        ("." if args.clear else f" to version {args.version}."))
 
+
+def _clear_repo_cache(cfg: Config, name: str) -> None:
+    if name in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", name):
+        fail("Invalid repository name; refusing to clear its cache.")
+    cache_path = cfg.cache_dir / "apt" / name
+    apt_cache = cache_path.parent
+    if apt_cache.is_symlink():
+        fail(f"Refusing to use a symlinked repository cache directory: {apt_cache}")
+    if apt_cache.exists() and not apt_cache.is_dir():
+        fail(f"Refusing to use a non-directory repository cache path: {apt_cache}")
+    if cache_path.is_symlink():
+        fail(f"Refusing to remove a symlinked repository cache: {cache_path}")
+    if cache_path.exists():
+        if not cache_path.is_dir():
+            fail(f"Refusing to remove a non-directory repository cache: {cache_path}")
+        shutil.rmtree(cache_path)
+
+
 def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
     repos = load_repos(cfg)
     if args.repo_command == "list":
@@ -2365,8 +2486,63 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
         for name, item in sorted(repos.items()):
             print(f"{name}\n  {item.get('url', '')} {item.get('suite', '')} "
                   f"{' '.join(item.get('components', []))}")
+    elif args.repo_command == "search":
+        _require_experimental(cfg)
+        query = args.query.strip().casefold()
+        if not query.strip():
+            fail("Provide a package name or description fragment to search for.")
+        indexes = _load_repo_indexes(cfg, repos, args.repo)
+        matches: list[tuple[str, dict[str, str]]] = []
+        for repo_name, index in indexes.items():
+            packages: dict[str, list[dict[str, str]]] = {}
+            for entry in index["packages"]:
+                package_name = str(entry.get("Package", ""))
+                description = " ".join(str(entry.get("Description", "")).splitlines())
+                if query in package_name.casefold() or query in description.casefold():
+                    packages.setdefault(package_name, []).append(entry)
+            for package_name, versions in packages.items():
+                candidate = experimental.newest_package(versions, package_name)
+                if candidate:
+                    matches.append((repo_name, candidate))
+        if not matches:
+            print(f"No matches for {args.query!r} in the usable synced indexes.")
+            return
+        for repo_name, entry in sorted(matches, key=lambda item: (item[1]["Package"], item[0])):
+            description = " ".join(str(entry.get("Description", "")).splitlines())
+            print(f"{entry['Package']:<32} {entry['Version']:<24} [{repo_name}]")
+            if description:
+                print(f"  {description[:180]}")
+    elif args.repo_command == "info":
+        _require_experimental(cfg)
+        if not PACKAGE_NAME.fullmatch(args.package):
+            fail("Invalid Debian package name.")
+        indexes = _load_repo_indexes(cfg, repos, args.repo)
+        matches: list[tuple[str, dict[str, str]]] = []
+        for repo_name, index in indexes.items():
+            candidate = experimental.newest_package(index["packages"], args.package)
+            if candidate:
+                matches.append((repo_name, candidate))
+        if not matches:
+            print(f"Package {args.package} was not found in the usable synced indexes.")
+            return
+        for repo_name, entry in sorted(matches, key=lambda item: item[0]):
+            header(f"{entry['Package']} {entry['Version']} · {repo_name}")
+            print(f"Architecture: {entry.get('Architecture', '?')}")
+            try:
+                size = fmt_size(int(entry.get("Size", "0")))
+            except (TypeError, ValueError):
+                size = "?"
+            print(f"Size: {size}")
+            print(f"Filename: {entry.get('Filename', '?')}")
+            print(f"SHA256: {entry.get('SHA256', '?')}")
+            if entry.get("Source"):
+                print(f"Source package: {entry['Source']}")
+            if entry.get("Depends"):
+                print(f"Depends: {entry['Depends']}")
+            if entry.get("Description"):
+                print(f"Description: {' '.join(entry['Description'].splitlines())}")
     elif args.repo_command == "add":
-        if not re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", args.name):
+        if args.name in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", args.name):
             fail("Invalid repository name.")
         if not args.url.startswith("https://") or "@" in args.url.split("//", 1)[-1].split("/", 1)[0]:
             fail("Experimental APT repositories must use credential-free HTTPS URLs.")
@@ -2383,14 +2559,25 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
             if keyring.is_symlink() or not keyring.is_file():
                 fail("The trusted keyring must be an existing regular file.")
             item["keyring"] = str(keyring.resolve())
+        previous = repos.get(args.name)
+        previous_settings = None
+        if isinstance(previous, dict):
+            previous_settings = tuple(
+                previous.get(key) for key in ("url", "suite", "components", "keyring")
+            )
+        new_settings = tuple(item.get(key) for key in
+                             ("url", "suite", "components", "keyring"))
         repos[args.name] = item
         save_repos(cfg, repos)
+        if previous_settings is not None and previous_settings != new_settings:
+            _clear_repo_cache(cfg, args.name)
         ok(f"Added repository {args.name}.")
     elif args.repo_command == "remove":
         if args.name not in repos:
             fail(f"Repository not found: {args.name}")
         del repos[args.name]
         save_repos(cfg, repos)
+        _clear_repo_cache(cfg, args.name)
         ok(f"Removed repository {args.name}.")
     elif args.repo_command == "sync":
         _require_experimental(cfg)
@@ -2417,7 +2604,7 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
         if args.name not in repos:
             fail(f"Repository not found: {args.name}")
         try:
-            index = experimental.load_synced_packages(cfg.cache_dir, args.name)
+            index = _load_repo_index(cfg, repos, args.name)
             candidate = experimental.newest_package(index["packages"], args.package, args.version)
             if candidate is None:
                 fail(f"Package {args.package} was not found in the verified index.")
@@ -3048,18 +3235,18 @@ License: {__license__}
 Usage: debark [GLOBAL OPTIONS] COMMAND [OPTIONS]
 
 Commands:
-  install PACKAGE.deb|URL   Inspect and install a Debian package
-  remove PACKAGE            Remove a DebArk-managed package
-  list                      List installed packages
-  search QUERY              Search installed packages
-  info PACKAGE.deb          Inspect a package without installing
-  files PACKAGE             List files managed for a package
-  verify PACKAGE            Check managed file hashes
+  install (-S, -i) PACKAGE.deb|URL  Inspect and install a Debian package
+  remove (-R, -r) PACKAGE           Remove a DebArk-managed package
+  list (-Q, -l)                     List installed packages
+  search (-Qs) QUERY                Search installed packages
+  info (-Qi, -s) PACKAGE.deb|NAME   Inspect a .deb or installed package
+  files (-Ql, -L) PACKAGE           List files managed for a package
+  verify (-Qk, -V) PACKAGE          Check managed file hashes
   scan                      Find xattr markers under the app directory
   repair PACKAGE            Restore missing or damaged managed files
   gc                        Clean orphaned DebArk markers
-  update                    Refresh Arch file metadata and local maps
-  upgrade                   Check for newer versions in synced beta APT indexes
+  update (-Fy)              Refresh Arch file metadata and local maps
+  upgrade (-Qu)             Check for newer versions in synced beta APT indexes
   snapshot PACKAGE          Save a verified local restore point
   rollback PACKAGE [ID]     Restore a saved local restore point
   extract PACKAGE.deb       Extract payload without installing
@@ -3074,7 +3261,9 @@ Commands:
   license [PACKAGE]          Show declared package licenses
   config [KEY VALUE]        Show or change configuration
   doctor                    Inspect local prerequisites
-  repo add|remove|list|sync|install  Manage Debian sources (sync/install are beta)
+  repo add|remove|list|sync|search|info|install  Manage Debian sources (beta search/info/install)
+  -Ss QUERY                 Search packages in synced beta APT indexes
+  -Si PACKAGE               Show package details from synced beta APT indexes
   cve --suite SUITE         Check installed packages against Debian advisories (beta)
   log                       Show recent audit events
   stats                     Show installed package statistics
@@ -3104,6 +3293,8 @@ Install options:
 Package payload is kept under /opt/PACKAGE or ~/.local/opt/PACKAGE.
 DebArk does not run Debian maintainer scripts.
 System commands from a trusted installation request access through sudo or doas.
+Shortcuts match common pacman/dpkg habits; they run one DebArk action and do not
+perform Arch system upgrades such as pacman -Syu.
 """
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3115,6 +3306,13 @@ def build_parser() -> argparse.ArgumentParser:
             f"Maintainer: {AUTHOR}\n"
             f"Project: {REPO}\n"
             f"License: {__license__}"
+        ),
+        epilog=(
+            "Common command shortcuts:\n"
+            "  -S/-i install   -R/-r remove   -Q/-l list   -Qs search installed\n"
+            "  -Qi/-s info     -Ql/-L files   -Qk/-V verify\n"
+            "  -Ss repo search -Si repo info  -Fy update   -Qu upgrade check\n"
+            "These run one DebArk action; combined pacman system-upgrade forms are not supported."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -3190,6 +3388,14 @@ def build_parser() -> argparse.ArgumentParser:
     remove_repo.add_argument("name")
     repo_list = repo_sub.add_parser("list")
     common(repo_list)
+    repo_search = repo_sub.add_parser("search")
+    common(repo_search)
+    repo_search.add_argument("query")
+    repo_search.add_argument("--repo", help="search one registered repository")
+    repo_info = repo_sub.add_parser("info")
+    common(repo_info)
+    repo_info.add_argument("package")
+    repo_info.add_argument("--repo", help="inspect one registered repository")
     repo_sync = repo_sub.add_parser("sync")
     common(repo_sync)
     repo_sync.add_argument("name", nargs="?")
@@ -3303,7 +3509,7 @@ def _quiet_summary(command: str, output: str) -> str:
 
 def main() -> int:
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(normalize_command_shortcuts(sys.argv[1:]))
     if getattr(args, "tui", False):
         UI.setup(not getattr(args, "no_color", False))
         if getattr(args, "json", False):
@@ -3345,8 +3551,11 @@ def main() -> int:
     try:
         if cfg.mode == "user" and os.geteuid() == 0 and os.environ.get("SUDO_USER"):
             fail("Run user-mode commands without sudo; use sudo only for system mode.")
+        needs_system_access = args.command in SYSTEM_ACCESS_COMMANDS
+        if args.command == "info":
+            needs_system_access = not Path(args.deb).expanduser().is_file()
         if (cfg.mode == "system" and os.geteuid() != 0
-                and args.command in SYSTEM_ACCESS_COMMANDS
+                and needs_system_access
                 and os.environ.get("DEBARK_COMPLETION") != "1"):
             return request_system_access()
         cfg.validate()

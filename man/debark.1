@@ -12,12 +12,15 @@ DebArk safely extracts Debian package payloads into per-package application dire
 .TP
 .B install PACKAGE.deb|URL
 Analyze and install a local Debian package or direct HTTP(S) URL.
+.B install also accepts the pacman-style -S and dpkg-style -i shortcuts.
 .TP
 .B remove PACKAGE
 Remove unchanged files registered to a DebArk package.
+.B remove also accepts -R and -r.
 .TP
 .B list, info, search, files, verify
 Inspect managed packages and package contents.
+.B list accepts -Q or -l; info accepts -Qi or -s; search accepts -Qs; files accepts -Ql or -L; verify accepts -Qk or -V.
 .TP
 .B repair PACKAGE
 Restore damaged application payload files from the recorded source package.
@@ -28,14 +31,18 @@ Save the current managed application tree as a local restore point.
 .B rollback PACKAGE [SNAPSHOT]
 Restore a saved application tree.
 .TP
-.B repo add|remove|list|sync|install
-Manage Debian sources. Sync and install are experimental and require a trusted keyring.
+.B repo add|remove|list|sync|search|info|install
+Manage Debian sources. Sync, search, info and install are experimental and require a trusted keyring and synced index data.
+.TP
+.B -Ss QUERY, -Si PACKAGE
+Search or inspect packages in already-synced experimental Debian indexes.
 .TP
 .B cve --suite SUITE
 Compare installed Debian packages with Debian Security Tracker data. Experimental.
 .TP
 .B upgrade
 Show newer versions available in already-synced experimental APT indexes. Does not replace installed apps.
+.B upgrade also accepts the pacman-style -Qu shortcut. update accepts -Fy.
 .SH OPTIONS
 .TP
 .BR -u , " --user"
@@ -69,6 +76,7 @@ Suppress informational output where supported.
 Show diagnostic details where supported.
 .SH SAFETY
 Debian maintainer scripts are never executed. Removal keeps files whose contents changed. Applications are not sandboxed unless the install used --sandbox and a supported runtime is available. Experimental APT sync verifies signed Release metadata with the keyring you provide; CVE reports may be incomplete or uncertain. Verify sources and findings before acting.
+Shortcuts perform one DebArk action; combined pacman operations such as -Syu do not update Arch system packages.
 .SH FILES
 .TP
 .I /var/lib/debark/db.json

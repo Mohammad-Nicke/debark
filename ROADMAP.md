@@ -4,17 +4,17 @@ This roadmap describes areas of work, not release promises. Priorities may chang
 
 ## Current focus
 
-- Expand security-focused tests for archive extraction, dependency mapping, and file integrity.
-- Keep continuous checks working across supported Python versions and periodically check current Arch Linux.
-- Document package trust limits and safe contribution practices.
+- Keep the signed APT preview clear about stale indexes, suite coverage and repository trust.
+- Keep CI green across supported Python versions and periodically check current Arch Linux.
+- Improve the dependency map through sourced, reviewable contributions.
 
 ## Next areas to evaluate
 
 - Improve the optional sandbox integration and document its effective permissions before considering any default behavior.
 - Prepare reproducible release packaging and evaluate an AUR package.
-- Improve dependency mapping with sourced, reviewable contributions.
-- Design authenticated Debian repository metadata handling before enabling APT index synchronization.
+- Add transactional updates for apps installed through the experimental APT integration, with preview and rollback.
+- Let users optionally pin an expected signing-key fingerprint for each Debian source.
 
 ## Deferred
 
-Automatic package upgrades, CVE feeds, hosted build services, remote registries, and additional architecture support need separate designs and maintenance capacity. They are not commitments for a particular release.
+Automatic replacement of installed apps, remote registries, hosted build services, and additional architecture support need separate designs and maintenance capacity. APT index synchronization, package discovery, update checks and CVE checks exist as opt-in beta features; they are not yet a complete package-upgrade system.

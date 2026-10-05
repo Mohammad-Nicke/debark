@@ -35,6 +35,10 @@ class ExperimentalError(Exception):
     """Raised when an experimental network operation cannot be trusted or used."""
 
 
+def _valid_repository_name(name: str) -> bool:
+    return name not in {".", ".."} and bool(re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", name))
+
+
 def _https_url(url: str, base: str | None = None) -> str:
     resolved = urllib.parse.urljoin(base, url) if base else url
     parsed = urllib.parse.urlsplit(resolved)
@@ -216,7 +220,7 @@ def sync_repository(repo: dict[str, Any], cache: Path, architecture: str = "amd6
     suite = str(repo.get("suite", ""))
     components = repo.get("components", [])
     keyring_value = repo.get("keyring")
-    if not re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", name):
+    if not _valid_repository_name(name):
         raise ExperimentalError("Invalid repository name in configuration.")
     if not suite or any(part in (".", "..") for part in PurePosixPath(suite).parts):
         raise ExperimentalError("Invalid Debian suite in repository configuration.")
@@ -321,7 +325,7 @@ def sync_repository(repo: dict[str, Any], cache: Path, architecture: str = "amd6
 
 
 def load_synced_packages(cache: Path, name: str, now: float | None = None) -> dict[str, Any]:
-    if not re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", name):
+    if not _valid_repository_name(name):
         raise ExperimentalError("Invalid repository name.")
     path = cache / "apt" / name / "packages.json"
     try:
@@ -491,6 +495,21 @@ def fetch_tracker(cache_file: Path, max_age: int = 6 * 60 * 60) -> dict[str, Any
         raise ExperimentalError("Debian Security Tracker data has an unexpected shape.")
     _write_atomic(cache_file, payload)
     return value
+
+
+def tracker_suites(tracker: dict[str, Any]) -> set[str]:
+    """Return suites represented in the currently downloaded tracker data."""
+    suites: set[str] = set()
+    for advisories in tracker.values():
+        if not isinstance(advisories, dict):
+            continue
+        for issue in advisories.values():
+            if not isinstance(issue, dict):
+                continue
+            releases = issue.get("releases", {})
+            if isinstance(releases, dict):
+                suites.update(name for name in releases if isinstance(name, str))
+    return suites
 
 
 def package_cves(installed: dict[str, dict[str, Any]], tracker: dict[str, Any],
