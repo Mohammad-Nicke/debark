@@ -5,8 +5,13 @@ set -euo pipefail
 umask 022
 
 REPO_URL="https://github.com/Mohammad-Nicke/debark.git"
-REPO_ARCHIVE_URL="https://github.com/Mohammad-Nicke/debark/archive/refs/heads/main.tar.gz"
-DEPENDENCY_BUNDLE_URL="https://github.com/Mohammad-Nicke/debark/releases/download/v0.1/debark-arch-dependencies-x86_64.tar.gz"
+RELEASE_BASE_URL="https://github.com/Mohammad-Nicke/debark/releases/download/v0.1"
+REPO_ARCHIVE_URL="$RELEASE_BASE_URL/debark-source-main.tar.gz"
+RELEASE_MANIFEST_URL="$RELEASE_BASE_URL/debark-source-main.manifest"
+RELEASE_SIGNATURE_URL="$RELEASE_MANIFEST_URL.sig"
+RELEASE_PUBLIC_KEY_URL="https://raw.githubusercontent.com/Mohammad-Nicke/debark/main/src/debark/data/debark-release-public.pem"
+RELEASE_PUBLIC_KEY_SHA256="e6054fe47a50b5eb33c955cac256746abe86c23e3aa4aeaf85216a89918ee55f"
+DEPENDENCY_BUNDLE_URL="$RELEASE_BASE_URL/debark-arch-dependencies-x86_64.tar.gz"
 MAINTAINER="Mr.Nick (@Mohammad-Nicke)"
 BUNDLE_MAX_AGE_DAYS=14
 TMP_DIR="$(mktemp -d -t debark-install-XXXXXX)"
@@ -95,26 +100,35 @@ ensure_noninteractive_admin() {
 
 command -v pacman >/dev/null 2>&1 || die "DebArk requires Arch Linux and pacman."
 
-SOURCE_DIR="$TMP_DIR/source"
-ARCHIVE_PATH="$TMP_DIR/debark-main.tar.gz"
-mkdir -p "$SOURCE_DIR"
-printf 'Fetching DebArk source from GitHub...\n'
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 3 --connect-timeout 15 "$REPO_ARCHIVE_URL" -o "$ARCHIVE_PATH" ||
-        die "Could not download DebArk from $REPO_URL. Check your internet connection and try again."
-elif command -v wget >/dev/null 2>&1; then
-    wget -q "$REPO_ARCHIVE_URL" -O "$ARCHIVE_PATH" ||
-        die "Could not download DebArk from $REPO_URL. Check your internet connection and try again."
-else
-    die "Install curl or wget to download DebArk from GitHub."
-fi
-tar -xzf "$ARCHIVE_PATH" --strip-components=1 -C "$SOURCE_DIR" ||
-    die "Could not unpack the DebArk source archive."
+ensure_openssl() {
+    if command -v openssl >/dev/null 2>&1; then
+        return 0
+    fi
+    ensure_noninteractive_admin
+    printf 'Installing OpenSSL for official release verification...\n'
+    if run_as_admin pacman -S --needed "${PACMAN_CONFIRM_ARGS[@]}" openssl &&
+        command -v openssl >/dev/null 2>&1; then
+        return 0
+    fi
+    printf 'pacman could not provide OpenSSL; checking the Arch dependency bundle.\n' >&2
+    install_dependencies_from_bundle openssl
+    command -v openssl >/dev/null 2>&1 ||
+        die "OpenSSL is still unavailable after the dependency bundle installation."
+}
 
-[ -f "$SOURCE_DIR/debark" ] || die "The source does not contain the debark command."
-[ -d "$SOURCE_DIR/src/debark" ] || die "The source does not contain DebArk's Python modules."
-[ -f "$SOURCE_DIR/dependencies/required-arch.txt" ] ||
-    die "The source is missing dependencies/required-arch.txt."
+download_file() {
+    local url="$1"
+    local destination="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 --connect-timeout 15 "$url" -o "$destination" ||
+            die "Could not download a required DebArk release file from GitHub. Check the connection and retry."
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$destination" ||
+            die "Could not download a required DebArk release file from GitHub. Check the connection and retry."
+    else
+        die "Install curl or wget to download DebArk from GitHub."
+    fi
+}
 
 install_required_dependencies() {
     local manifest="$1"
@@ -285,6 +299,79 @@ install_dependencies_from_bundle() {
     done
 }
 
+ensure_openssl
+
+SOURCE_DIR="$TMP_DIR/source"
+ARCHIVE_PATH="$TMP_DIR/debark-source-main.tar.gz"
+MANIFEST_PATH="$TMP_DIR/debark-source-main.manifest"
+SIGNATURE_PATH="$TMP_DIR/debark-source-main.manifest.sig"
+PUBLIC_KEY_PATH="$TMP_DIR/debark-release-public.pem"
+mkdir -p "$SOURCE_DIR"
+printf 'Fetching the signed DebArk source release from GitHub...\n'
+download_file "$REPO_ARCHIVE_URL" "$ARCHIVE_PATH"
+download_file "$RELEASE_MANIFEST_URL" "$MANIFEST_PATH"
+download_file "$RELEASE_SIGNATURE_URL" "$SIGNATURE_PATH"
+download_file "$RELEASE_PUBLIC_KEY_URL" "$PUBLIC_KEY_PATH"
+
+[[ "$(head -n 1 "$MANIFEST_PATH")" = "DEBARK-OFFICIAL-MANIFEST 1" ]] ||
+    die "The DebArk release manifest has an unsupported format."
+MANIFEST_REPOSITORY="$(sed -n 's/^repository=//p' "$MANIFEST_PATH")"
+MANIFEST_COMMIT="$(sed -n 's/^commit=//p' "$MANIFEST_PATH")"
+MANIFEST_VERSION="$(sed -n 's/^version=//p' "$MANIFEST_PATH")"
+MANIFEST_ARCHIVE_SHA256="$(sed -n 's/^archive_sha256=//p' "$MANIFEST_PATH")"
+MANIFEST_ROOT_KIND="$(sed -n 's/^root_kind=//p' "$MANIFEST_PATH")"
+[ "$MANIFEST_REPOSITORY" = "https://github.com/Mohammad-Nicke/debark" ] ||
+    die "The signed release manifest names a different repository."
+[[ "$MANIFEST_COMMIT" =~ ^[[:xdigit:]]{40,64}$ ]] ||
+    die "The signed release manifest contains an invalid commit ID."
+[[ "$MANIFEST_VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]] ||
+    die "The signed release manifest contains an invalid version."
+[ "$MANIFEST_ROOT_KIND" = "source" ] ||
+    die "The signed release manifest is not for the Python source distribution."
+[[ "$MANIFEST_ARCHIVE_SHA256" =~ ^[[:xdigit:]]{64}$ ]] ||
+    die "The signed release manifest contains an invalid source checksum."
+
+PUBLIC_KEY_FINGERPRINT="$(openssl pkey -pubin -in "$PUBLIC_KEY_PATH" -outform DER | sha256sum | cut -d ' ' -f 1)" ||
+    die "Could not read the official DebArk release key."
+[ "$PUBLIC_KEY_FINGERPRINT" = "$RELEASE_PUBLIC_KEY_SHA256" ] ||
+    die "The official DebArk release key does not match the pinned key."
+openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY_PATH" -rawin \
+    -in "$MANIFEST_PATH" -sigfile "$SIGNATURE_PATH" >/dev/null ||
+    die "The DebArk release signature is invalid. Do not install this archive."
+
+ARCHIVE_SHA256="$(sha256sum "$ARCHIVE_PATH" | cut -d ' ' -f 1)"
+[ "$ARCHIVE_SHA256" = "$MANIFEST_ARCHIVE_SHA256" ] ||
+    die "The DebArk source archive does not match the signed release manifest. Retry after the release finishes updating."
+while IFS= read -r archive_entry; do
+    case "$archive_entry" in
+        /*|..|../*|*/../*|*/..) die "The signed source archive contains an unsafe path: $archive_entry" ;;
+    esac
+done < <(tar -tzf "$ARCHIVE_PATH")
+while IFS= read -r archive_record; do
+    case "${archive_record:0:1}" in
+        -|d) ;;
+        *) die "The signed source archive contains a link or special file." ;;
+    esac
+done < <(tar -tvzf "$ARCHIVE_PATH")
+tar -xzf "$ARCHIVE_PATH" --strip-components=1 -C "$SOURCE_DIR" ||
+    die "Could not unpack the signed DebArk source archive."
+
+[ -f "$SOURCE_DIR/debark" ] || die "The source does not contain the debark command."
+[ -d "$SOURCE_DIR/src/debark" ] || die "The source does not contain DebArk's Python modules."
+[ -f "$SOURCE_DIR/dependencies/required-arch.txt" ] ||
+    die "The source is missing dependencies/required-arch.txt."
+[ -f "$SOURCE_DIR/LICENSE" ] || die "The source is missing its license file."
+[ -f "$SOURCE_DIR/src/debark/data/debark-release-public.pem" ] ||
+    die "The source is missing the official release public key."
+cmp -s "$PUBLIC_KEY_PATH" "$SOURCE_DIR/src/debark/data/debark-release-public.pem" ||
+    die "The signed archive contains a different release public key."
+SOURCE_VERSION="$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' \
+    "$SOURCE_DIR/src/debark/__init__.py" | head -n 1)"
+[ "$SOURCE_VERSION" = "$MANIFEST_VERSION" ] ||
+    die "The signed release version does not match the package source."
+install -m 644 "$MANIFEST_PATH" "$SOURCE_DIR/src/debark/data/official.manifest"
+install -m 644 "$SIGNATURE_PATH" "$SOURCE_DIR/src/debark/data/official.manifest.sig"
+
 printf '\n%sDebArk · Installer%s\n' "$C_CYAN" "$C_RESET"
 printf '%sMaintainer: %s%s\n' "$C_DIM" "$MAINTAINER" "$C_RESET"
 printf '%sProject: %s%s\n' "$C_DIM" "$REPO_URL" "$C_RESET"
@@ -373,6 +460,7 @@ if [ "$INSTALL_MODE" = "system" ]; then
     ZSH_COMPLETION_DIR="/usr/local/share/zsh/site-functions"
     FISH_COMPLETION_DIR="/usr/local/share/fish/vendor_completions.d"
     MAN_DIR="/usr/local/share/man/man1"
+    LICENSE_DIR="/usr/local/share/licenses/debark"
 else
     USER_HOME="$DETECTED_USER_HOME"
     if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
@@ -389,6 +477,7 @@ else
     ZSH_COMPLETION_DIR="$USER_HOME/.local/share/zsh/site-functions"
     FISH_COMPLETION_DIR="$USER_HOME/.local/share/fish/vendor_completions.d"
     MAN_DIR="$USER_HOME/.local/share/man/man1"
+    LICENSE_DIR="$USER_HOME/.local/share/licenses/debark"
 fi
 
 AUTO_YES="false"
@@ -417,7 +506,8 @@ run_privileged() {
 
 for target in "$BIN_DIR/debark" "$LIB_DIR/debark" \
     "$BASH_COMPLETION_DIR/debark" "$ZSH_COMPLETION_DIR/_debark" \
-    "$FISH_COMPLETION_DIR/debark.fish" "$MAN_DIR/debark.1"; do
+    "$FISH_COMPLETION_DIR/debark.fish" "$MAN_DIR/debark.1" \
+    "$LICENSE_DIR/LICENSE"; do
     if [ -L "$target" ]; then
         die "Refusing to replace a symbolic link: $target"
     fi
@@ -480,6 +570,10 @@ run_privileged install -Dm 644 "$SOURCE_DIR/completions/_debark" \
 run_privileged install -Dm 644 "$SOURCE_DIR/completions/debark.fish" \
     "$FISH_COMPLETION_DIR/debark.fish"
 run_privileged install -Dm 644 "$SOURCE_DIR/man/debark.1" "$MAN_DIR/debark.1"
+run_privileged install -Dm 644 "$SOURCE_DIR/LICENSE" "$LICENSE_DIR/LICENSE"
+if [ -f "$SOURCE_DIR/LICENSE.fa" ]; then
+    run_privileged install -Dm 644 "$SOURCE_DIR/LICENSE.fa" "$LICENSE_DIR/LICENSE.fa"
+fi
 
 CONFIG_TMP="$TMP_DIR/config.json"
 python3 - "$CONFIG_TMP" "$AUTO_YES" "$COLORS" "$THREADS" "$EXPERIMENTAL_FEATURES" <<'PY'

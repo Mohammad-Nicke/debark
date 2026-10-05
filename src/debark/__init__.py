@@ -3,4 +3,4 @@
 __version__ = "0.1.1"
 __maintainer__ = "Mr.Nick (@Mohammad-Nicke)"
 __url__ = "https://github.com/Mohammad-Nicke/debark"
-__license__ = "MIT"
+__license__ = "DebArk Source-Available License 1.0"

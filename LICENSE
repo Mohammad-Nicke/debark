@@ -1,21 +1,84 @@
-MIT License
-
+DebArk Source-Available License 1.0
 Copyright (c) 2026 Mr.Nick (Mohammad Nick)
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license applies only to the DebArk material first published under these
+terms. Earlier copies of DebArk that were distributed with the MIT License
+remain subject to the MIT License included with those copies.
+Nothing in this license revokes or narrows permissions already granted under
+the MIT License for earlier releases or material.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Definitions
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+“DebArk” or the “Software” means the complete, unmodified DebArk program and
+its accompanying materials that are owned by the copyright holder and
+identified as DebArk in the official repository:
+https://github.com/Mohammad-Nicke/debark
+
+Third-party components are not covered by this license. Their own licenses
+continue to apply.
+
+2. Permission to use and redistribute the complete Software
+
+The copyright holder grants you a worldwide, non-exclusive, royalty-free
+permission to download, install, run, and use an official, unmodified copy of
+DebArk for personal, commercial, or organizational purposes.
+
+You may also reproduce and redistribute the complete Software, unchanged and
+as a separate, identifiable component of another project or product, provided
+that you:
+
+  a. include the complete DebArk distribution and this license;
+  b. retain all copyright, attribution, and official integrity information;
+  c. identify the included copy as unmodified DebArk and link to the official
+     repository; and
+  d. do not state or imply that the copyright holder endorses your project.
+
+These permissions do not allow you to extract DebArk files, code, or
+substantial portions for reuse in another program. Configuration and data
+created through normal use are not modifications to the Software.
+
+3. Restrictions
+
+Except where a right cannot lawfully be restricted, you may not:
+
+  a. modify, adapt, translate, patch, customize, or create a derivative version
+     of DebArk;
+  b. copy or reuse DebArk code, files, or substantial portions separately from
+     the complete, unchanged Software;
+  c. remove or alter copyright, license, attribution, or integrity notices;
+  d. bypass, remove, or falsify an official-build or integrity check; or
+  e. decompile or reverse engineer compiled DebArk binaries to create a
+     modified or competing version.
+
+Nothing in this license grants rights to the DebArk name, logo, or other
+trademarks, except for truthful identification of an unchanged copy as
+required above.
+
+4. Official copies
+
+An “official copy” is a DebArk distribution whose files and release metadata
+match a release signed by the official DebArk signing key. A copied or
+repackaged distribution is official only while its covered files and signed
+metadata remain unchanged. A cryptographic signature verifies the origin and
+integrity of a release; it does not make modified code impossible to produce.
+
+5. Termination
+
+The permissions in this license terminate automatically if you materially
+violate its terms. You must stop using and distributing copies that are not
+authorized under this license. Any reinstatement must be granted in writing
+by the copyright holder, except where applicable law provides otherwise.
+
+6. No warranty
+
+DebArk is provided “as is”, without warranties or conditions of any kind, to
+the maximum extent permitted by applicable law. The copyright holder is not
+liable for claims or damages arising from use of the Software, except where
+such exclusion is not permitted by law.
+
+7. License status
+
+This is a custom source-available license, not an Open Source license. It does
+not grant permission to modify DebArk or to distribute modified versions.
+This license is a project draft and should receive review from a qualified
+intellectual-property lawyer before being relied on for enforcement.

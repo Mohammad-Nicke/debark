@@ -1,6 +1,11 @@
 name: Refresh Arch dependency bundle
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - dependencies/required-arch.txt
+      - .github/workflows/dependency-bundle.yml
   workflow_dispatch:
   schedule:
     - cron: "41 6 * * 1"

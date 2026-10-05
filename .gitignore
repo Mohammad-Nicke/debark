@@ -3,6 +3,9 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+.build/
+debark-release-private.pem
+src/debark/data/official.manifest*
 .venv/
 venv/
 .DS_Store
