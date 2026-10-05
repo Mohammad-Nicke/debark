@@ -82,7 +82,7 @@ jobs:
 
               cat > /bundle/manifest.txt <<EOF
           format=1
-          maintainer=Master Nick (@Mohammad-Nicke)
+          maintainer=Mr.Nick (@Mohammad-Nicke)
           repository=https://github.com/Mohammad-Nicke/debark
           architecture=x86_64
           generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
