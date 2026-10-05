@@ -245,7 +245,7 @@ class SandboxWrapperTests(unittest.TestCase):
             content = wrapper.read_text(encoding="utf-8")
 
         self.assertIn('firejail --net=none --read-only="$HOME"', content)
-        self.assertIn('bwrap --die-with-parent --unshare-all', content)
+        self.assertIn("bwrap --die-with-parent --unshare-all", content)
         self.assertIn('--ro-bind "$HOME" "$HOME"', content)
         self.assertNotIn('--bind "$HOME" "$HOME"', content)
 
