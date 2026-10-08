@@ -24,6 +24,8 @@ bash -c "$(wget -qO- https://raw.githubusercontent.com/Mohammad-Nicke/debark/mai
 
 The installer fetches the current source and dependency manifest from this repository. It first asks pacman to install missing requirements from configured Arch repositories. If that fails, the current x86_64 signed dependency bundle from GitHub Releases may be used. This fallback still needs GitHub access, a working Arch keyring, and a compatible package state; it is not an offline installer.
 
+The dependency bundle is refreshed weekly. Since Arch is a rolling release, the installer recommends a bundle no older than 14 days. If the fallback bundle is older, an interactive install explains the risk and asks whether to continue for this installation; keeping the age limit is recommended. For a non-interactive install, set DEBARK_ALLOW_STALE_BUNDLE=1 to accept an older bundle. This bypasses only the age check; signature, checksum, architecture, and pacman package-state checks remain active. The 14-day limit applies to this fallback bundle, not to an installed DebArk copy.
+
 The installer supports two layouts:
 
 | Mode | Command | App files | Settings | DebArk data and cache |
@@ -165,7 +167,7 @@ Other tools include `debark extract FILE.deb` to inspect/extract package payload
 
 ### The installer cannot find a required tool
 
-The online installer needs `curl` or `wget` to download itself. It then uses pacman for the required Arch packages and may need administrator access. If the configured mirrors are unavailable, check them and the system keyring, then retry. The GitHub dependency bundle is a fallback for x86_64 and is time-limited to avoid installing a stale partial system upgrade.
+The online installer needs `curl` or `wget` to download itself. It then uses pacman for the required Arch packages and may need administrator access. If the configured mirrors are unavailable, check them and the system keyring, then retry. The GitHub dependency bundle is a fallback for x86_64. If it is over 14 days old, the installer asks before continuing; for non-interactive use, DEBARK_ALLOW_STALE_BUNDLE=1 accepts the age. Signature, checksum, architecture, and pacman package-state checks still apply.
 
 ### An app does not launch
 

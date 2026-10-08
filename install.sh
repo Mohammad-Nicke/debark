@@ -256,8 +256,33 @@ install_dependencies_from_bundle() {
     generated_epoch="$(date -u -d "$generated_utc" +%s 2>/dev/null)" ||
         die "Could not read the dependency bundle build date."
     now_epoch="$(date -u +%s)"
-    if (( now_epoch - generated_epoch > BUNDLE_MAX_AGE_DAYS * 86400 || generated_epoch - now_epoch > 86400 )); then
-        die "The hosted dependency bundle is older than ${BUNDLE_MAX_AGE_DAYS} days or has a future build date. Update Arch through pacman, then retry."
+    bundle_age_seconds=$((now_epoch - generated_epoch))
+    if (( generated_epoch - now_epoch > 86400 )); then
+        die "The dependency bundle build date is more than one day in the future; refusing an invalid freshness timestamp."
+    fi
+    if (( bundle_age_seconds > BUNDLE_MAX_AGE_DAYS * 86400 )); then
+        bundle_age_hours=$((bundle_age_seconds / 3600))
+        printf '\nThe dependency bundle is about %s hours old; the recommended maximum age is %s days.\n' \
+            "$bundle_age_hours" "$BUNDLE_MAX_AGE_DAYS" >&2
+        printf 'This limit applies only to the GitHub fallback bundle. Arch is rolling, so older packages may miss fixes or no longer match current system libraries.\n' >&2
+        printf 'Keeping the limit is recommended. Continuing skips only the age check for this installation; signature, checksum, architecture, and pacman package-state checks still apply.\n' >&2
+        case "${DEBARK_ALLOW_STALE_BUNDLE:-0}" in
+            1|true|TRUE|yes|YES)
+                printf 'The age check was disabled explicitly for this installation.\n' >&2
+                ;;
+            0|false|FALSE|no|NO|"")
+                if [ -t 3 ]; then
+                    if ! ask_yes_no "Continue with this older signed dependency bundle for this installation?" "n"; then
+                        die "The old dependency bundle was declined. Update Arch through pacman, then retry the installer."
+                    fi
+                else
+                    die "The dependency bundle is older than ${BUNDLE_MAX_AGE_DAYS} days. Rerun in a terminal to choose, or set DEBARK_ALLOW_STALE_BUNDLE=1 for this installation."
+                fi
+                ;;
+            *)
+                die "DEBARK_ALLOW_STALE_BUNDLE must be set to 1 or 0."
+                ;;
+        esac
     fi
 
     mapfile -d '' -t package_files < <(find "$bundle_dir" -maxdepth 1 -type f -name '*.pkg.tar.zst' -print0 | sort -z)
