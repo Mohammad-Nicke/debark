@@ -9,6 +9,8 @@
 - Keep the 14-day dependency-bundle age advisory while retaining signature, checksum, architecture, and pacman state checks.
 - Install DebArk system-wide and add default APT command aliases for the system and invoking user.
 - Route supported APT and dpkg operations through DebArk, with `*-real` aliases for the original pacman-managed executables.
+- Check and restore DebArk shortcuts at startup and after pacman updates to APT or dpkg packages without replacing pacman-owned commands.
+- Detect signed source updates by commit as well as version, so maintenance changes can arrive without changing 0.1.3.
 - Ask for administrator access through `sudo` or `doas` when a system operation needs it.
 
 ## 0.1.2 — 2026-10-05

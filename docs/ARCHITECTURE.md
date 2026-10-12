@@ -10,7 +10,7 @@ The package archive is published as a GitHub Release asset rather than stored in
 
 The required packages are Python, GNU binutils, OpenSSL, libarchive, and zstd. Python runs DebArk, binutils provides `ar` for reading Debian packages, and libarchive plus zstd provide the tools used to build local ALPM packages for system-mode apps. Optional sandbox runtimes are not required for a normal install.
 
-`debark update` refreshes the local dependency map and pacman's file-provider database, then checks the installed version against `src/debark/__init__.py` on the project's `main` branch. `debark upgrade` checks app versions in previously synced beta indexes, then performs the same DebArk version check. A newer DebArk version is shown with its matching changelog section and requires an interactive confirmation before the installer is downloaded and run. The installer always updates DebArk system-wide; it does not replace Debian apps.
+`debark update` refreshes the local dependency map and pacman's file-provider database, then checks the signed source release for a newer version or commit. `debark upgrade` checks app versions in previously synced beta indexes, then performs the same DebArk update check. The available revision is shown with its changelog section and requires an interactive confirmation before the installer is downloaded and run. This also delivers maintenance changes without increasing the displayed version. The installer always updates DebArk system-wide; it does not replace Debian apps.
 
 ## Runtime layout
 
@@ -20,6 +20,14 @@ The required packages are Python, GNU binutils, OpenSSL, libarchive, and zstd. P
 - `plugins.py` loads only explicitly enabled local hooks after checking ownership and write permissions.
 
 The runtime uses the Python standard library. System dependencies are invoked with argument arrays; package-controlled strings are not passed to a shell.
+
+The installer places APT and dpkg shortcuts in `/usr/local/bin` and the
+invoking user's `~/.local/bin`. The installed CLI checks these symlinks at
+startup and `fix-shortcuts` restores missing or recognized aliases. A pacman
+post-transaction hook calls the same repair command after `apt` or `dpkg`
+packages change. DebArk leaves pacman-owned
+executables under `/usr/bin` untouched; explicit absolute paths therefore
+continue to invoke the original program.
 
 ## Install flow
 

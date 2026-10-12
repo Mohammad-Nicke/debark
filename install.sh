@@ -370,6 +370,8 @@ tar -xzf "$ARCHIVE_PATH" --strip-components=1 -C "$SOURCE_DIR" ||
 [ -f "$SOURCE_DIR/LICENSE" ] || die "The source is missing its license file."
 [ -f "$SOURCE_DIR/src/debark/data/debark-release-public.pem" ] ||
     die "The source is missing the official release public key."
+[ -f "$SOURCE_DIR/packaging/pacman/debark-shortcuts.hook" ] ||
+    die "The source is missing the pacman shortcut-repair hook."
 cmp -s "$PUBLIC_KEY_PATH" "$SOURCE_DIR/src/debark/data/debark-release-public.pem" ||
     die "The signed archive contains a different release public key."
 SOURCE_VERSION="$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' \
@@ -436,6 +438,9 @@ ZSH_COMPLETION_DIR="/usr/local/share/zsh/site-functions"
 FISH_COMPLETION_DIR="/usr/local/share/fish/vendor_completions.d"
 MAN_DIR="/usr/local/share/man/man1"
 LICENSE_DIR="/usr/local/share/licenses/debark"
+PACMAN_HOOK_DIR="/etc/pacman.d/hooks"
+PACMAN_HOOK_FILE="$PACMAN_HOOK_DIR/debark-shortcuts.hook"
+PACMAN_HOOK_SOURCE="$SOURCE_DIR/packaging/pacman/debark-shortcuts.hook"
 USER_BIN_DIR="$DETECTED_USER_HOME/.local/bin"
 APT_COMMANDS=(apt apt-get apt-cache dpkg apt-real apt-get-real apt-cache-real dpkg-real)
 for user_path in "$DETECTED_USER_HOME" "$DETECTED_USER_HOME/.local" "$USER_BIN_DIR"; do
@@ -503,7 +508,7 @@ done
 for target in "$BIN_DIR/debark" "$LIB_DIR/debark" \
     "$BASH_COMPLETION_DIR/debark" "$ZSH_COMPLETION_DIR/_debark" \
     "$FISH_COMPLETION_DIR/debark.fish" "$MAN_DIR/debark.1" \
-    "$LICENSE_DIR/LICENSE"; do
+    "$LICENSE_DIR/LICENSE" "$PACMAN_HOOK_FILE"; do
     if [ -L "$target" ]; then
         die "Refusing to replace a symbolic link: $target"
     fi
@@ -511,6 +516,16 @@ for target in "$BIN_DIR/debark" "$LIB_DIR/debark" \
         die "Refusing to replace a pacman-owned path: $target"
     fi
 done
+if [ -L "$PACMAN_HOOK_DIR" ]; then
+    die "Refusing to install a pacman hook through a symbolic-link directory: $PACMAN_HOOK_DIR"
+fi
+if [ -e "$PACMAN_HOOK_DIR" ] && [ ! -d "$PACMAN_HOOK_DIR" ]; then
+    die "The pacman hook directory is not a directory: $PACMAN_HOOK_DIR"
+fi
+if [ -e "$PACMAN_HOOK_FILE" ] &&
+    ! grep -Fq 'Exec = /usr/local/bin/debark fix-shortcuts --system-only --quiet' "$PACMAN_HOOK_FILE"; then
+    die "A different pacman hook already exists at $PACMAN_HOOK_FILE; it was left unchanged."
+fi
 
 TARGET_VERSION="$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' \
     "$SOURCE_DIR/src/debark/__init__.py" | head -n 1)"
@@ -583,6 +598,7 @@ run_privileged install -Dm 644 "$SOURCE_DIR/completions/debark.fish" \
     "$FISH_COMPLETION_DIR/debark.fish"
 run_privileged install -Dm 644 "$SOURCE_DIR/man/debark.1" "$MAN_DIR/debark.1"
 run_privileged install -Dm 644 "$SOURCE_DIR/LICENSE" "$LICENSE_DIR/LICENSE"
+run_privileged install -Dm 644 "$PACMAN_HOOK_SOURCE" "$PACMAN_HOOK_FILE"
 if [ -f "$SOURCE_DIR/LICENSE.fa" ]; then
     run_privileged install -Dm 644 "$SOURCE_DIR/LICENSE.fa" "$LICENSE_DIR/LICENSE.fa"
 fi
@@ -648,6 +664,7 @@ fi
 printf '\n%sDebArk installed:%s %s/debark\n' "$C_GREEN" "$C_RESET" "$BIN_DIR"
 printf 'Configuration: %s/config.json\n' "$CFG_DIR"
 printf 'Shell completions and man page installed.\n'
+printf 'Pacman post-transaction shortcut check installed: %s\n' "$PACMAN_HOOK_FILE"
 printf 'System and user command shortcuts installed.\n'
 printf 'Running DebArk compatibility repair...\n'
 run_privileged "$BIN_DIR/debark" fix

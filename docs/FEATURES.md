@@ -56,7 +56,7 @@ The sandbox option adds a launcher that uses an already-installed bubblewrap or 
 | CVE scan | Experimental opt-in; compares installed Debian versions to Debian Security Tracker data for a selected suite |
 | Debian source definition management | Saved locally; HTTPS only for experimental sync |
 | Signed APT index sync and repository installs | Experimental opt-in; detached Release signature, signed SHA256/size checks, x86_64/amd64 only |
-| APT-compatible command aliases | Installed by default system-wide and for the invoking user; supported operations route to DebArk, `*-real` aliases hand off to pacman-managed executables, and PATH limitations apply to absolute paths and restricted services |
+| APT-compatible command aliases | Installed by default system-wide and for the invoking user; checked at startup and after pacman changes to `apt` or `dpkg`; `*-real` aliases hand off to pacman-managed executables; absolute paths still bypass PATH aliases |
 | Search and inspect Debian repository packages | Experimental opt-in; works from synced, unexpired indexes without a network request |
 | Package-manager command shortcuts | Common pacman and dpkg forms for install, remove, list, search, info, files, verify and update checks |
 | Desktop entries and launch wrappers | Implemented; existing destinations are not replaced |

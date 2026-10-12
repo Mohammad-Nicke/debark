@@ -8,6 +8,7 @@ on:
       - src/debark/**
       - completions/**
       - man/debark.1
+      - packaging/pacman/debark-shortcuts.hook
       - dependencies/required-arch.txt
       - LICENSE
       - LICENSE.fa
@@ -43,7 +44,8 @@ jobs:
 
           git archive --format=tar --prefix=debark-main/ "$GITHUB_SHA" \
             debark src/debark completions man/debark.1 \
-            dependencies/required-arch.txt LICENSE LICENSE.fa \
+            dependencies/required-arch.txt packaging/pacman/debark-shortcuts.hook \
+            LICENSE LICENSE.fa \
             | gzip -n > dist/source/debark-source-main.tar.gz
 
           python3 scripts/create-release-manifest.py \

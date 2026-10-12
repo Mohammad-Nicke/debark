@@ -17,6 +17,7 @@ import platform
 import posixpath
 import pwd
 import re
+import secrets
 import shlex
 import shutil
 import stat
@@ -47,6 +48,13 @@ XATTR_INSTALLED = "user.debark.installed"
 XATTR_HASH = "user.debark.sha256"
 LEGACY_BIN_DIR = Path("/usr/local/bin")
 LEGACY_DESKTOP_DIR = Path("/usr/local/share/applications")
+SYSTEM_BIN_DIR = Path("/usr/local/bin")
+SYSTEM_DEBARK_COMMAND = SYSTEM_BIN_DIR / "debark"
+APT_COMMAND_SHORTCUTS = (
+    "apt", "apt-get", "apt-cache", "dpkg",
+    "apt-real", "apt-get-real", "apt-cache-real", "dpkg-real",
+)
+USER_COMMAND_SHORTCUTS = ("debark", *APT_COMMAND_SHORTCUTS)
 PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]{0,127}$")
 COMMAND_NAME = re.compile(r"^[A-Za-z0-9_.+-]+$")
 DB_SCHEMA_VERSION = 3
@@ -63,7 +71,7 @@ COMMAND_NAMES = frozenset({
     "log", "stats", "snapshot", "rollback", "extract", "convert", "export",
     "import", "bulk", "watch", "profile", "plugin", "pin", "license", "fix", "help",
     "apt-compat",
-    "real-tool",
+    "real-tool", "fix-shortcuts",
     "about",
 })
 COMMAND_SHORTCUTS = {
@@ -180,21 +188,43 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 def current_user_home() -> Path:
-    if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
-        try:
-            return Path(pwd.getpwnam(os.environ["SUDO_USER"]).pw_dir)
-        except KeyError:
-            pass
+    if os.geteuid() == 0:
+        for variable in ("SUDO_USER", "DOAS_USER"):
+            username = os.environ.get(variable)
+            if username:
+                try:
+                    return Path(pwd.getpwnam(username).pw_dir)
+                except KeyError:
+                    pass
+        for variable in ("SUDO_UID", "PKEXEC_UID"):
+            uid = os.environ.get(variable)
+            if uid and uid.isdigit():
+                try:
+                    return Path(pwd.getpwuid(int(uid)).pw_dir)
+                except KeyError:
+                    pass
     return Path.home()
 
 def user_owner() -> tuple[int, int] | None:
-    if os.geteuid() != 0 or not os.environ.get("SUDO_USER"):
+    if os.geteuid() != 0:
         return None
-    try:
-        user = pwd.getpwnam(os.environ["SUDO_USER"])
-        return user.pw_uid, user.pw_gid
-    except KeyError:
-        return None
+    for variable in ("SUDO_USER", "DOAS_USER"):
+        username = os.environ.get(variable)
+        if username:
+            try:
+                user = pwd.getpwnam(username)
+                return user.pw_uid, user.pw_gid
+            except KeyError:
+                pass
+    for variable in ("SUDO_UID", "PKEXEC_UID"):
+        uid = os.environ.get(variable)
+        if uid and uid.isdigit():
+            try:
+                user = pwd.getpwuid(int(uid))
+                return user.pw_uid, user.pw_gid
+            except KeyError:
+                pass
+    return None
 
 def validate_directory_chain(path: Path) -> None:
     path = Path(os.path.abspath(path))
@@ -970,6 +1000,119 @@ def pacman_owns(path: Path) -> str | None:
     except OSError:
         pass
     return None
+
+def _shortcut_needs_repair(path: Path, name: str, target: Path) -> bool:
+    if not path.is_symlink():
+        if path.exists():
+            raise DebArkError(
+                f"A file already occupies the DebArk shortcut path {path}; "
+                "it was left unchanged."
+            )
+        return True
+    try:
+        current = path.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise DebArkError(f"Could not inspect shortcut {path}: {exc}") from exc
+    if current == target.resolve(strict=False):
+        return False
+    if pacman_owns(path):
+        raise DebArkError(f"Pacman owns {path}; DebArk will not replace a package-managed file.")
+    native_targets = {
+        (Path("/usr/bin") / name).resolve(strict=False),
+        (Path("/bin") / name).resolve(strict=False),
+    }
+    if current in native_targets:
+        return True
+    raise DebArkError(f"Shortcut {path} points to an unrelated command; it was left unchanged.")
+
+def _repair_shortcut_directory(
+    directory: Path,
+    names: tuple[str, ...],
+    target: Path,
+    owner: tuple[int, int] | None = None,
+) -> list[str]:
+    validate_directory_chain(directory)
+    existed = directory.exists()
+    try:
+        directory.mkdir(parents=True, exist_ok=True, mode=0o755)
+    except OSError as exc:
+        raise DebArkError(f"Could not prepare shortcut directory {directory}: {exc}") from exc
+    if not existed and owner is not None and os.geteuid() == 0:
+        with contextlib.suppress(OSError):
+            os.chown(directory, owner[0], owner[1], follow_symlinks=False)
+    changed: list[str] = []
+    repair_names = [
+        name for name in names
+        if _shortcut_needs_repair(directory / name, name, target)
+    ]
+    for name in repair_names:
+        link = directory / name
+        temporary = directory / f".debark-{name}-{os.getpid()}-{secrets.token_hex(4)}"
+        try:
+            os.symlink(str(target), temporary)
+            if owner is not None and os.geteuid() == 0:
+                with contextlib.suppress(OSError, NotImplementedError):
+                    os.chown(temporary, owner[0], owner[1], follow_symlinks=False)
+            os.replace(temporary, link)
+        except OSError as exc:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+            raise DebArkError(f"Could not restore DebArk shortcut {link}: {exc}") from exc
+        changed.append(name)
+    return changed
+
+def repair_command_shortcuts(system_only: bool = False) -> list[str]:
+    """Restore DebArk aliases without changing pacman-owned executables."""
+    executable = SYSTEM_DEBARK_COMMAND
+    if not executable.is_file() or executable.is_symlink():
+        raise DebArkError(f"The system DebArk command is missing or unsafe: {executable}")
+    changed = _repair_shortcut_directory(
+        SYSTEM_BIN_DIR, APT_COMMAND_SHORTCUTS, executable
+    )
+    if not system_only:
+        home = current_user_home()
+        has_invoking_user = (
+            os.geteuid() != 0
+            or any(os.environ.get(name) for name in
+                   ("SUDO_USER", "DOAS_USER", "SUDO_UID", "PKEXEC_UID"))
+        )
+        if has_invoking_user:
+            owner = user_owner() or (os.getuid(), os.getgid())
+            user_bin = home / ".local" / "bin"
+            changed.extend(
+                f"user:{name}" for name in _repair_shortcut_directory(
+                    user_bin, USER_COMMAND_SHORTCUTS, executable, owner
+                )
+            )
+    return changed
+
+def ensure_system_shortcuts() -> int:
+    """Check the installed system aliases on each official DebArk invocation."""
+    if Path(__file__).resolve().parent != Path("/usr/local/lib/debark"):
+        return 0
+    try:
+        needs_repair = [
+            name for name in APT_COMMAND_SHORTCUTS
+            if _shortcut_needs_repair(
+                SYSTEM_BIN_DIR / name, name, SYSTEM_DEBARK_COMMAND
+            )
+        ]
+    except DebArkError as exc:
+        print(f"debark: shortcut check failed: {exc}", file=sys.stderr)
+        return 1
+    if needs_repair and os.geteuid() != 0:
+        return request_system_access()
+    try:
+        system_only = "--system-only" in sys.argv[1:]
+        changes = repair_command_shortcuts(system_only=system_only)
+    except DebArkError as exc:
+        print(f"debark: shortcut check failed: {exc}", file=sys.stderr)
+        return 1
+    if not changes:
+        return 0
+    if "--quiet" not in sys.argv[1:]:
+        print(f"debark: restored command shortcuts: {', '.join(changes)}")
+    return 0
 
 def _normalize_manifest(name: str, value: dict[str, Any]) -> dict[str, Any]:
     """Normalize a legacy database entry to the current manifest shape."""
@@ -2910,6 +3053,15 @@ def cmd_fix(args: argparse.Namespace, cfg: Config) -> None:
         save_db(cfg, database)
         ok(f"Registered {adopted} confirmed legacy candidate(s).")
 
+def cmd_fix_shortcuts(args: argparse.Namespace, cfg: Config) -> None:
+    if getattr(args, "user", False):
+        fail("Command shortcuts are system integration; run fix-shortcuts without --user.")
+    changed = repair_command_shortcuts(system_only=args.system_only)
+    if changed:
+        ok(f"Restored command shortcuts: {', '.join(changed)}")
+    elif not getattr(args, "quiet", False):
+        print("DebArk command shortcuts are already in place.")
+
 
 def _load_repo_index(cfg: Config, repos: dict[str, Any], name: str) -> dict[str, Any]:
     definition = repos.get(name)
@@ -2944,22 +3096,92 @@ def _load_repo_indexes(
     return indexes
 
 
-def _read_upstream_file(url: str, limit: int = 512 * 1024) -> str:
+def _read_upstream_bytes(url: str, limit: int = 512 * 1024) -> bytes:
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": f"DebArk/{VERSION} ({REPO})", "Accept": "text/plain"},
+        headers={
+            "User-Agent": f"DebArk/{VERSION} ({REPO})",
+            "Accept": "application/octet-stream, text/plain",
+        },
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         payload = response.read(limit + 1)
     if len(payload) > limit:
         raise DebArkError("The update metadata is larger than expected.")
-    return payload.decode("utf-8")
+    return payload
+
+def _read_upstream_file(url: str, limit: int = 512 * 1024) -> str:
+    return _read_upstream_bytes(url, limit).decode("utf-8")
 
 
 def _version_key(value: str) -> tuple[int, ...]:
     if not re.fullmatch(r"\d+(?:\.\d+){1,3}", value):
         raise DebArkError(f"Unsupported DebArk version format: {value}")
     return tuple(int(part) for part in value.split("."))
+
+def _parse_source_manifest_identity(content: bytes) -> dict[str, str]:
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise DebArkError("The signed source manifest is not valid UTF-8.") from exc
+    if not lines or lines[0] != "DEBARK-OFFICIAL-MANIFEST 1":
+        raise DebArkError("The signed source manifest has an unsupported format.")
+    metadata: dict[str, str] = {}
+    file_section = False
+    for line in lines[1:]:
+        if line == "--files--":
+            file_section = True
+            break
+        if not line:
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key in metadata:
+            raise DebArkError("The signed source manifest has invalid metadata.")
+        metadata[key] = value
+    required = {"repository", "commit", "version", "archive_sha256", "root_kind"}
+    if (not file_section or set(metadata) != required
+            or metadata["repository"] != REPO
+            or not re.fullmatch(r"[0-9a-f]{40,64}", metadata["commit"])
+            or not re.fullmatch(r"[0-9a-f]{64}", metadata["archive_sha256"])
+            or metadata["root_kind"] != "source"):
+        raise DebArkError("The signed source manifest does not match this project.")
+    _version_key(metadata["version"])
+    return metadata
+
+def _verified_upstream_source_identity() -> dict[str, str]:
+    release = "https://github.com/Mohammad-Nicke/debark/releases/download/v0.1"
+    manifest = _read_upstream_bytes(f"{release}/debark-source-main.manifest", 1024 * 1024)
+    signature = _read_upstream_bytes(
+        f"{release}/debark-source-main.manifest.sig", 4096
+    )
+    metadata = _parse_source_manifest_identity(manifest)
+    compiled_info = getattr(sys.modules.get(__name__), "__compiled__", None)
+    if compiled_info is None:
+        public_key = Path(__file__).resolve().parent / "data/debark-release-public.pem"
+        if not public_key.is_file():
+            public_key = Path(sys.argv[0]).resolve().parent / "debark-release-public.pem"
+    else:
+        containing_dir = getattr(compiled_info, "containing_dir", None)
+        public_key = Path(containing_dir or Path(sys.argv[0]).resolve().parent) / "debark-release-public.pem"
+    with tempfile.TemporaryDirectory(prefix="debark-release-check-") as temporary:
+        root = Path(temporary)
+        manifest_path = root / "manifest"
+        signature_path = root / "signature"
+        manifest_path.write_bytes(manifest)
+        signature_path.write_bytes(signature)
+        try:
+            result = subprocess.run(
+                ["openssl", "pkeyutl", "-verify", "-pubin", "-inkey",
+                 str(public_key), "-rawin", "-in", str(manifest_path),
+                 "-sigfile", str(signature_path)],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise DebArkError(f"Could not verify the current release signature: {exc}") from exc
+    if result.returncode:
+        raise DebArkError("The current DebArk source manifest has an invalid signature.")
+    return metadata
 
 
 def _upstream_release_notes(changelog: str, version: str) -> list[str]:
@@ -3009,23 +3231,36 @@ def _install_upstream_debark(cfg: Config) -> None:
 
 
 def check_debark_update(cfg: Config) -> None:
-    """Check the current GitHub source and offer a system-wide in-place update."""
+    """Check the current signed source revision and offer a system-wide update."""
     base = "https://raw.githubusercontent.com/Mohammad-Nicke/debark/main"
     try:
-        init_source = _read_upstream_file(f"{base}/src/debark/__init__.py", limit=64 * 1024)
-        match = re.search(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]\s*$",
-                          init_source, re.MULTILINE)
-        if match is None:
-            raise DebArkError("The upstream source does not declare a DebArk version.")
-        latest = match.group(1)
-        if _version_key(latest) <= _version_key(VERSION):
+        latest_identity = _verified_upstream_source_identity()
+        latest = latest_identity["version"]
+        is_source_install = Path(__file__).resolve().parent == Path("/usr/local/lib/debark")
+        local_identity = None
+        if is_source_install:
+            local_manifest = Path(__file__).resolve().parent / "data/official.manifest"
+            local_identity = _parse_source_manifest_identity(local_manifest.read_bytes())
+            if local_identity["version"] != VERSION:
+                raise DebArkError("The installed release metadata does not match this DebArk version.")
+        if _version_key(latest) < _version_key(VERSION):
+            return
+        if (_version_key(latest) == _version_key(VERSION)
+                and (local_identity is None
+                     or latest_identity["commit"] == local_identity["commit"])):
             return
         changelog = _read_upstream_file(f"{base}/CHANGELOG.md")
     except (OSError, UnicodeError, ValueError, urllib.error.URLError, DebArkError) as exc:
         warn(f"Could not check for DebArk updates: {exc}")
         return
 
-    info(f"DebArk {latest} is available (installed: {VERSION}).")
+    if latest == VERSION:
+        info(
+            f"A signed maintenance update for DebArk {VERSION} is available "
+            f"(source revision {latest_identity['commit'][:8]})."
+        )
+    else:
+        info(f"DebArk {latest} is available (installed: {VERSION}).")
     notes = _upstream_release_notes(changelog, latest)
     if notes:
         section(f"What's new in DebArk {latest}")
@@ -3947,6 +4182,7 @@ Commands:
   scan                      Find xattr markers under the app directory
   repair PACKAGE            Restore missing or damaged managed files
   fix [--adopt]              Migrate records and recover older installations
+  fix-shortcuts              Check and restore DebArk command shortcuts
   gc                        Clean orphaned DebArk markers
   update (-Fy)              Refresh Arch file metadata and local maps
   upgrade (-Qu)             Check for newer versions in synced beta APT indexes
@@ -4009,7 +4245,8 @@ to DebArk-managed applications; they are not a full Debian package manager.
 reconciles DebArk's inventory. Repository commands need the beta preview enabled.
 Use apt-real, apt-get-real, apt-cache-real, or dpkg-real to run the original
 executables from /usr/bin through DebArk. Absolute /usr/bin paths bypass PATH
-aliases, and pkexec may use a restricted PATH.
+aliases, and pkexec may use a restricted PATH. DebArk checks shortcuts at startup
+and after pacman transactions without replacing pacman-owned executables.
 """
 
 def build_parser() -> argparse.ArgumentParser:
@@ -4096,6 +4333,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="offer explicit adoption of unregistered legacy candidates")
     fix.add_argument("-y", "--yes", action="store_true",
                      help="confirm adoption prompts")
+    fix_shortcuts = sub.add_parser(
+        "fix-shortcuts", help="check and restore DebArk command shortcuts"
+    )
+    common(fix_shortcuts)
+    fix_shortcuts.add_argument("--system-only", action="store_true", help=argparse.SUPPRESS)
     for name, argument, help_text in (
         ("info", "deb", "inspect a package file or installed app"),
         ("search", "query", "search installed apps"),
@@ -4268,6 +4510,9 @@ def main() -> int:
     except IntegrityError as exc:
         print(f"debark: official build verification failed: {exc}", file=sys.stderr)
         return 126
+    shortcut_status = ensure_system_shortcuts()
+    if shortcut_status:
+        return shortcut_status
     parser = build_parser()
     args = parser.parse_args(normalize_command_shortcuts(sys.argv[1:]))
     if getattr(args, "tui", False):
@@ -4301,7 +4546,8 @@ def main() -> int:
         "verify": cmd_verify, "scan": cmd_scan, "update": cmd_update,
         "upgrade": cmd_upgrade, "repo": cmd_repo, "cve": cmd_cve, "config": cmd_config,
         "doctor": cmd_doctor, "about": cmd_about,
-        "repair": cmd_repair, "fix": cmd_fix, "gc": cmd_gc, "log": cmd_log, "stats": cmd_stats,
+        "repair": cmd_repair, "fix": cmd_fix, "fix-shortcuts": cmd_fix_shortcuts,
+        "gc": cmd_gc, "log": cmd_log, "stats": cmd_stats,
         "snapshot": cmd_snapshot, "rollback": cmd_rollback, "extract": cmd_extract,
         "convert": cmd_convert, "export": cmd_export, "import": cmd_import,
         "bulk": cmd_bulk, "watch": cmd_watch, "profile": cmd_profile,

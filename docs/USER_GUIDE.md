@@ -34,7 +34,7 @@ DebArk itself is always installed system-wide:
 
 The installer requests administrator access through `sudo` or `doas` when it writes system paths or installs Arch dependencies. DebArk commands that need system access request it through the same helper. App files can still be installed per-user with `debark install --user`; that option does not install a per-user copy of DebArk.
 
-Re-running the installer replaces DebArk's system-wide program files. It keeps DebArk's configuration, registered Debian repositories, installed-app records, snapshots, and DebArk cache. `debark update` and `debark upgrade` check the program version after their usual work. When a newer DebArk version is found, the command shows the matching changelog notes and asks before installing it. If no newer version is available, the self-update check is silent.
+Re-running the installer replaces DebArk's system-wide program files. It keeps DebArk's configuration, registered Debian repositories, installed-app records, snapshots, and DebArk cache. `debark update` and `debark upgrade` check the signed source release after their usual work. A newer version or a newer maintenance commit within the same version is shown with its changelog notes and requires confirmation before installation. If the installed source is current, the self-update check is silent.
 
 ## Install a Debian application
 
@@ -113,8 +113,8 @@ Short forms run one DebArk action. Combined operations such as `pacman -Syu` are
 The word “update” can refer to three different things:
 
 - `pacman -Syu` updates Arch Linux and its Arch packages.
-- `debark update` refreshes DebArk's local dependency map and, in system mode, pacman's file-provider data. It then checks for a newer DebArk program version and asks before replacing DebArk itself.
-- `debark upgrade` lists newer versions for apps installed through the optional, already-synced APT integration. It does not replace those apps. It also checks DebArk's own version and can offer to update DebArk.
+- `debark update` refreshes DebArk's local dependency map and, in system mode, pacman's file-provider data. It then checks the signed source version and commit and asks before replacing DebArk itself.
+- `debark upgrade` lists newer versions for apps installed through the optional, already-synced APT integration. It does not replace those apps. It also checks DebArk's signed source and can offer a version or maintenance update.
 
 The DebArk self-update replaces its system-wide program files and keeps its settings, repository list, package records, snapshots, and DebArk cache. It does not upgrade Arch packages or replace installed Debian applications.
 
@@ -136,7 +136,7 @@ Run `debark fix` after upgrading if package records are missing or use an older 
 
 ## Optional Debian repositories and security checks
 
-DebArk always installs `apt`, `apt-get`, `apt-cache`, and `dpkg` command shortcuts. Repository integration remains an opt-in beta feature. Enable that preview with:
+DebArk always installs `apt`, `apt-get`, `apt-cache`, and `dpkg` command shortcuts. It checks these links at startup and installs a pacman post-transaction hook for changes to packages named `apt` or `dpkg`. Run `debark fix-shortcuts` to check or restore them manually. The original commands remain pacman-managed in `/usr/bin`; DebArk never replaces those files or changes pacman's package database. Repository integration remains an opt-in beta feature. Enable that preview with:
 
 ```sh
 debark config experimental_features true
@@ -174,7 +174,7 @@ dpkg -i /path/to/package.deb
 
 Package versions from repositories come from the verified indexes you have synced. APT package dependencies are handled through DebArk's Debian-to-Arch mapping; DebArk does not implement the full APT dependency solver. `apt-get install -f -y` without package names asks DebArk to reconcile its installed-app inventory, then returns so an updater can install a local package. `dpkg -i FILE.deb` sends each local package through DebArk's install or replacement flow, including dependency checks and the normal DebArk records. It does not register the package in dpkg's database. Batch changes run as separate app transactions, so an error partway through can leave earlier successful operations in place. The wrappers do not run Debian maintainer scripts. Operations that could change or remove unrelated system packages, including `full-upgrade`, `dist-upgrade`, `autoremove`, and direct dpkg database changes, are rejected. The original Arch commands remain package-managed and are not overwritten; use `apt-real`, `apt-get-real`, `apt-cache-real`, or `dpkg-real` through DebArk to run them. Normal PATH lookups resolve the shortcuts because the installer places them in `/usr/local/bin` and the invoking user's `~/.local/bin`.
 
-PATH shortcuts cannot capture an explicit path such as `/usr/bin/apt`, a shell with a cached command path, or a privileged service that discards `/usr/local/bin` from its PATH. Refresh a shell with `hash -r` in Bash or `rehash` in Zsh. For a service using `pkexec`, configure it to invoke `/usr/local/bin/apt-get` explicitly; DebArk cannot replace pacman-owned files in `/usr/bin` while still allowing pacman to update the original tools.
+PATH shortcuts cannot capture an explicit path such as `/usr/bin/apt` or a privileged service that discards `/usr/local/bin` from its PATH. Refresh a shell with `hash -r` in Bash or `rehash` in Zsh. For a service using `pkexec`, configure it to invoke `/usr/local/bin/apt-get` explicitly. Pacman remains able to update its original tools because DebArk never overwrites package-owned files.
 
 When a caller uses `bash -c`, the command and its arguments must be one quoted string. For example, this form selects the DebArk wrapper after `pkexec` starts the shell:
 

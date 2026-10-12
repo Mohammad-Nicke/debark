@@ -28,6 +28,9 @@ Restore damaged application payload files from the recorded source package.
 .B fix [--adopt]
 Migrate older DebArk records and recover package entries from pacman's database. With --adopt, ask before registering detected legacy app directories.
 .TP
+.B fix-shortcuts
+Check and restore the system and invoking user's DebArk command shortcuts. The system shortcut check also runs at DebArk startup and after pacman transactions.
+.TP
 .B snapshot PACKAGE
 Save the current managed application tree as a local restore point.
 .TP
@@ -44,13 +47,13 @@ Search or inspect packages in already-synced experimental Debian indexes.
 Compare installed Debian packages with Debian Security Tracker data. Experimental.
 .TP
 .B update
-Refresh local dependency metadata and pacman's file-provider database, then check for a DebArk update. If one is available, show its changelog notes and ask before installing it.
+Refresh local dependency metadata and pacman's file-provider database, then check the signed source release for a newer version or maintenance commit. If one is available, show its changelog notes and ask before installing it.
 .TP
 .B upgrade
 Show newer versions available in already-synced experimental APT indexes, then check for a DebArk update. App versions are not replaced by this command; a DebArk update is offered separately.
 .B upgrade also accepts the pacman-style -Qu shortcut. update accepts -Fy.
 .SH APT COMPATIBILITY
-The installer adds apt, apt-get, apt-cache, and dpkg command aliases in /usr/local/bin and the invoking user's ~/.local/bin. They route supported operations to DebArk-managed applications. Repository operations require the experimental APT preview plus a configured, synced repository. The wrappers support common install, update, upgrade, remove, search, and query operations; dpkg queries are read-only, while dpkg -i routes local .deb packages through DebArk's install and replacement flow. apt-get install -f without package names runs DebArk inventory recovery. They do not implement every APT option or the full Debian dependency solver, and they never execute Debian maintainer scripts. Unsupported commands fail explicitly. The original pacman-managed commands remain in /usr/bin; use apt-real, apt-get-real, apt-cache-real, or dpkg-real to run those commands through DebArk. PATH aliases cannot intercept absolute paths such as /usr/bin/apt, and pkexec may discard /usr/local/bin from PATH.
+The installer adds apt, apt-get, apt-cache, and dpkg command aliases in /usr/local/bin and the invoking user's ~/.local/bin. DebArk checks and repairs its aliases at startup; a pacman post-transaction hook checks the system aliases after changes to packages named apt or dpkg. They route supported operations to DebArk-managed applications. Repository operations require the experimental APT preview plus a configured, synced repository. The wrappers support common install, update, upgrade, remove, search, and query operations; dpkg queries are read-only, while dpkg -i routes local .deb packages through DebArk's install and replacement flow. apt-get install -f without package names runs DebArk inventory recovery. They do not implement every APT option or the full Debian dependency solver, and they never execute Debian maintainer scripts. Unsupported commands fail explicitly. The original pacman-managed commands remain in /usr/bin; use apt-real, apt-get-real, apt-cache-real, or dpkg-real to run those commands through DebArk. PATH aliases cannot intercept absolute paths such as /usr/bin/apt, and pkexec may discard /usr/local/bin from PATH; use /usr/local/bin/apt-get explicitly for those callers.
 .SH OPTIONS
 .TP
 .BR -u , " --user"
