@@ -229,7 +229,10 @@ class PackageAndDependencyTests(unittest.TestCase):
 
 class InstallLifecycleTests(unittest.TestCase):
     def make_deb(
-        self, root: Path, marker: Path, version: str = "1.0",
+        self,
+        root: Path,
+        marker: Path,
+        version: str = "1.0",
         payload: bytes = b"#!/bin/sh\nprintf 'fixture\\n'\n",
     ) -> Path:
         control_archive = root / "control.tar.gz"
