@@ -2,3 +2,5 @@
 python
 binutils
 openssl
+libarchive
+zstd

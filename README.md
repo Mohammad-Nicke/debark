@@ -4,7 +4,7 @@
 
 **Run Debian apps on Arch Linux, without spreading their files across the system.**
 
-[![Source version](https://img.shields.io/badge/source-0.1.2-blue)](CHANGELOG.md)
+[![Source version](https://img.shields.io/badge/source-0.1.3-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Source--Available-orange)](LICENSE)
 [![CI](https://github.com/Mohammad-Nicke/debark/actions/workflows/ci.yml/badge.svg)](https://github.com/Mohammad-Nicke/debark/actions/workflows/ci.yml)
 
@@ -28,9 +28,9 @@ Or use <code>wget</code>:
 bash -c "$(wget -qO- https://raw.githubusercontent.com/Mohammad-Nicke/debark/main/install.sh)"
 ~~~
 
-The installer verifies a signed source release before installing it. It uses OpenSSL for signature checks; if OpenSSL is missing, it first asks pacman for it and can fall back to the Arch package bundle. It then asks pacman to install the remaining required packages through your configured repositories. If those repositories cannot provide them, the installer downloads the current x86_64 package bundle from this project's GitHub Releases. The bundle includes the full dependency closure resolved from Arch's package database, upstream package signatures and checksums; pacman checks those package signatures with your system keyring. Required packages include Python, GNU binutils and OpenSSL. Binutils provides <code>ar</code>, which DebArk uses to read <code>.deb</code> files. No Python packages need to be downloaded from PyPI.
+The installer verifies a signed source release before installing it. It uses OpenSSL for signature checks; if OpenSSL is missing, it first asks pacman for it and can fall back to the Arch package bundle. It then asks pacman to install the remaining required packages through your configured repositories. If those repositories cannot provide them, the installer downloads the current x86_64 package bundle from this project's GitHub Releases. The bundle includes the full dependency closure resolved from Arch's package database, upstream package signatures and checksums; pacman checks those package signatures with your system keyring. Required packages include Python, GNU binutils, OpenSSL, libarchive, and zstd. Binutils provides <code>ar</code> for reading <code>.deb</code> files; libarchive and zstd provide the tools used to create pacman-managed app packages. No Python packages need to be downloaded from PyPI.
 
-The release bundle is refreshed weekly and the installer refuses a bundle older than 14 days. To avoid a partial upgrade, it also refuses the fallback if a package in the dependency closure is older on the system than in the bundle. Update Arch fully with pacman first, then retry. Installation requires an internet connection to GitHub, pacman, a working Arch keyring and administrator access when installing system packages. The bundle does not replace pacman or make installing Arch packages possible on a non-Arch system. It currently covers x86_64; other architectures use their configured pacman repositories.
+The release bundle is refreshed weekly. Because Arch is a rolling release, the installer recommends using a bundle no older than 14 days. If the GitHub fallback is older, an interactive install explains the risk and asks whether to continue for that installation; keeping the age limit is recommended. For a non-interactive install, set DEBARK_ALLOW_STALE_BUNDLE=1 to accept an older bundle. This skips only the age check: signature, checksum, architecture and pacman package-state checks still apply. If a bundled package is older than its installed counterpart, the installer refuses it to avoid a partial upgrade. Update Arch fully with pacman and retry. Installation requires an internet connection to GitHub, pacman, a working Arch keyring and administrator access when installing system packages. The bundle does not replace pacman or make installing Arch packages possible on a non-Arch system. It currently covers x86_64; other architectures use their configured pacman repositories.
 
 The command needs a downloader (<code>curl</code> or <code>wget</code>) to fetch the installer and source archive. It always installs the current version from GitHub, including when you start it from a local checkout. If DebArk is already installed in the selected mode, the installer replaces its program files in place while keeping its settings, registered repositories, package records, snapshots and DebArk cache. An existing installation's mode is selected by default; `debark update` and `debark upgrade` keep that mode when they offer a self-update.
 
@@ -64,16 +64,17 @@ Or install a package directly:
 
 ~~~sh
 debark install ./app.deb
+debark install --arch-system ./app.deb
 debark install --user ./app.deb
 debark install --user https://example.org/app.deb
 ~~~
 
-Before installing, DebArk reads the package metadata, checks its files and dependencies, and shows you the plan. In system mode, it can ask pacman to install mapped Arch dependencies. Uncertain name matches are only suggestions; DebArk will not install them automatically.
+Before installing, DebArk reads the package metadata, checks its files and dependencies, and shows you the plan. System mode registers the application with pacman as a namespaced `debark-app-PACKAGE` package, so pacman can track and remove its files. `--arch-system` makes this system-wide choice explicit in scripts; it cannot be combined with `--user`. Plain system installs use the same pacman-managed path. DebArk can also ask pacman to install mapped Arch dependencies. Uncertain name matches are only suggestions; DebArk will not install them automatically.
 
 <details>
 <summary>What does “isolated app directory” mean?</summary>
 
-DebArk keeps an app's payload together under <code>/opt/APP</code> or <code>~/.local/opt/APP</code>. It records the files it installed and their hashes, and creates launchers that can use libraries bundled with that app. It does not copy the app's files into Arch's system library directories or register the Debian package in pacman's database.
+DebArk keeps an app's payload together under <code>/opt/APP</code> or <code>~/.local/opt/APP</code>. System installs are registered in pacman's database under a DebArk-specific package name; user installs are tracked in DebArk's user inventory. DebArk records managed files and hashes, and creates launchers that can use libraries bundled with the app. Keeping files grouped under <code>/opt</code> avoids copying Debian libraries over Arch system libraries while still letting pacman track a system installation.
 
 This keeps installation and removal more contained. It does not make the app harmless: when launched, an app still runs with your user permissions and can access files or the network available to that user.
 
@@ -153,6 +154,10 @@ The Debian-style <code>-i</code>, <code>-r</code>, <code>-l</code>, <code>-L</co
 
 Other commands include <code>extract</code> and <code>convert</code> for working with package files, <code>bulk</code> and <code>watch</code> for handling several packages, and <code>profile</code> for saving TUI preferences.
 
+## Recover an older installation
+
+If an older DebArk version's package list is missing or has an outdated format, run <code>debark fix</code> to rebuild its records from saved manifests, app-local markers, and pacman's package database. Use <code>debark scan</code> to review unregistered candidates. To register a likely old app after reviewing it, run <code>debark fix --adopt</code>; DebArk asks before adopting each candidate and leaves unrelated directories alone.
+
 </details>
 
 ## Dependencies and updates
@@ -164,7 +169,9 @@ Run <code>debark update</code> to refresh Arch file-provider data and DebArk's b
 <details>
 <summary>Try the experimental APT and security tools</summary>
 
-The installer offers an opt-in beta preview for signed APT index sync, installing new packages from a synced index, Debian Security Tracker checks, and update detection. The preview may be incomplete or fail. It does not automatically replace already-installed apps.
+The installer offers an opt-in beta preview for signed APT index sync, installing new packages from a synced index, Debian Security Tracker checks, and update detection. The preview may be incomplete or fail. It does not update installed apps in the background; updates happen only when you request them through DebArk or the optional command wrappers.
+
+The installer has a separate opt-in for the <code>apt</code>, <code>apt-get</code>, <code>apt-cache</code>, and <code>dpkg</code> commands. They route supported requests through DebArk for managed applications: update indexes, install or update a named app, upgrade APT-managed DebArk apps, remove or purge an app, search or inspect synced packages, and list installed DebArk apps. The <code>dpkg</code> wrapper supports read-only queries and routes <code>dpkg -i /path/to/package.deb</code> through DebArk's normal install or replacement flow. <code>apt-get install -f -y</code> invokes DebArk's inventory recovery so an updater can continue to its local package install. For example, an app can request its own update with <code>apt-get update</code> followed by <code>apt-get install --only-upgrade PACKAGE</code>. DebArk does not run Debian maintainer scripts or emulate the complete APT dependency solver. Unsupported operations, including <code>full-upgrade</code>, <code>dist-upgrade</code>, and <code>autoremove</code>, fail with an explanation. Existing system commands are left in place; after opt-in, the DebArk commands may take precedence through PATH. For privileged updater commands, the system's sanitized PATH must include <code>/usr/local/bin</code> before any system APT or dpkg command.
 
 If you skipped the prompt, enable the preview with <code>debark config experimental_features true</code>. Add a repository with a keyring you already trust, then sync and install from it:
 
@@ -178,9 +185,9 @@ debark cve --suite bookworm
 debark upgrade
 ~~~
 
-The APT preview accepts HTTPS repositories only. It verifies the signed <code>Release</code> file with <code>gpgv</code>, checks index hashes and sizes from that file, and verifies the downloaded package against its indexed SHA256. Search and info use the most recently synced, unexpired indexes and do not contact the network. You must obtain and trust the keyring yourself; DebArk does not import keys or decide which publishers to trust. A missing <code>gpgv</code> command requires the Arch <code>gnupg</code> package.
+The APT preview accepts HTTPS repositories only. It verifies the signed <code>Release</code> file with <code>gpgv</code>, checks index hashes and sizes from that file, and verifies the downloaded package against its indexed SHA256. Search and info use the most recently synced, unexpired indexes and do not contact the network. You must obtain and trust the keyring yourself; DebArk does not import keys or decide which publishers to trust. A missing <code>gpgv</code> command requires the Arch <code>gnupg</code> package. The APT-compatible commands require this preview to be enabled and at least one trusted repository to be configured and synced.
 
-The CVE command compares saved Debian package versions with tracker data for the suite you name. It can report uncertain results; check each advisory with Debian before acting. <code>debark upgrade</code> lists newer app versions from already-synced indexes (it does not replace those apps), then also checks DebArk itself and offers an update when one is available. A DebArk self-update replaces the tool, not your installed Debian apps.
+The CVE command compares saved Debian package versions with tracker data for the suite you name. It can report uncertain results; check each advisory with Debian before acting. <code>debark upgrade</code> lists newer app versions from already-synced indexes, then also checks DebArk itself and offers an update when one is available. The APT-compatible <code>apt-get upgrade</code> command can install newer versions of apps recorded as APT-managed by DebArk. Multi-app operations run as separate app transactions, so a later failure can leave earlier successful updates in place. A DebArk self-update replaces the tool, not your installed Debian apps.
 
 </details>
 
@@ -236,6 +243,6 @@ Only packages that include a usable desktop entry can be added to the menu. Some
 
 ## Project
 
-Maintained by [Mr.Nick (@Mohammad-Nicke)](https://github.com/Mohammad-Nicke). New DebArk material is under the [DebArk Source-Available License 1.0](LICENSE), with copyright retained by Mr.Nick (Mohammad Nick). The license permits use and redistribution only for an unmodified, complete DebArk copy; it does not permit customized forks or reuse of code fragments. DebArk is source-available, not open source. Earlier copies released under MIT remain under their original terms; see [LICENSE-MIT-LEGACY](LICENSE-MIT-LEGACY).
+Maintained by [Mr.Nick (@Mohammad-Nicke)](https://github.com/Mohammad-Nicke). DebArk is distributed under the [DebArk Source-Available License 1.0](LICENSE), with copyright retained by Mr.Nick (Mohammad Nick). The license permits use and redistribution only for an unmodified, complete DebArk copy; it does not permit customized forks or reuse of code fragments. DebArk is source-available, not open source.
 
 Project guides: [User guide](docs/USER_GUIDE.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Roadmap](ROADMAP.md)

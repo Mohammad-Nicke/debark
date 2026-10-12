@@ -18,7 +18,7 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from debark import engine
+from debark import apt_compat, engine
 
 
 def make_tar(entries: list[tuple[str, bytes | None, bytes | None]]) -> bytes:
@@ -228,15 +228,23 @@ class PackageAndDependencyTests(unittest.TestCase):
 
 
 class InstallLifecycleTests(unittest.TestCase):
-    def make_deb(self, root: Path, marker: Path) -> Path:
+    def make_deb(
+        self,
+        root: Path,
+        marker: Path,
+        version: str = "1.0",
+        payload: bytes = b"#!/bin/sh\nprintf 'fixture\\n'\n",
+    ) -> Path:
         control_archive = root / "control.tar.gz"
         control_archive.write_bytes(
             make_tar(
                 [
                     (
                         "./control",
-                        b"Package: debark-fixture\nVersion: 1.0\nArchitecture: amd64\n"
-                        b"Depends: libc6 (>= 2.31)\n",
+                        (
+                            f"Package: debark-fixture\nVersion: {version}\n"
+                            "Architecture: amd64\nDepends: libc6 (>= 2.31)\n"
+                        ).encode(),
                         None,
                     ),
                     ("./postinst", f"#!/bin/sh\ntouch {marker}\n".encode(), None),
@@ -247,13 +255,12 @@ class InstallLifecycleTests(unittest.TestCase):
         data_buffer = io.BytesIO()
         with tarfile.open(fileobj=data_buffer, mode="w:gz") as archive:
             member = tarfile.TarInfo("./usr/bin/fixture")
-            payload = b"#!/bin/sh\nprintf 'fixture\\n'\n"
             member.size = len(payload)
             member.mode = 0o755
             archive.addfile(member, io.BytesIO(payload))
         data_archive.write_bytes(data_buffer.getvalue())
 
-        package = root / "debark-fixture.deb"
+        package = root / f"debark-fixture-{version}.deb"
         (root / "debian-binary").write_bytes(b"2.0\n")
         subprocess.run(
             ["ar", "cr", str(package), "debian-binary", control_archive.name, data_archive.name],
@@ -323,6 +330,84 @@ class InstallLifecycleTests(unittest.TestCase):
             self.assertFalse(launcher.exists())
             self.assertNotIn("debark-fixture", engine.load_db(config))
             self.assertFalse(marker.exists())
+
+    def test_apt_updater_commands_reinstall_local_deb_through_debark(self) -> None:
+        if not shutil.which("ar"):
+            self.skipTest("binutils ar is required to exercise real .deb files")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            marker = root / "maintainer-script-ran"
+            old_package_dir = root / "old"
+            new_package_dir = root / "new"
+            old_package_dir.mkdir()
+            new_package_dir.mkdir()
+            old_package = self.make_deb(old_package_dir, marker, version="1.0")
+            new_payload = b"#!/bin/sh\nprintf 'fixture updated\\n'\n"
+            new_package = self.make_deb(new_package_dir, marker, version="1.1", payload=new_payload)
+
+            config = object.__new__(engine.Config)
+            config.mode = "user"
+            config.home_dir = home
+            config.set_paths()
+            config.auto_yes = False
+            config.colors = False
+            config.threads = 1
+            config.apt_compat_enabled = True
+
+            wrapper_dir = root / "bin"
+            wrapper_dir.mkdir()
+            entrypoint = Path(engine.__file__).parents[2] / "debark"
+            for name in ("apt-get", "dpkg"):
+                (wrapper_dir / name).symlink_to(entrypoint)
+            lookup = subprocess.run(
+                ["bash", "-c", "command -v apt-get && command -v dpkg"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env={"PATH": f"{wrapper_dir}{os.pathsep}{os.defpath}"},
+            )
+            self.assertEqual(
+                lookup.stdout.splitlines(),
+                [str(wrapper_dir / "apt-get"), str(wrapper_dir / "dpkg")],
+            )
+
+            real_run = subprocess.run
+
+            def isolated_run(command: list[str], *args: object, **kwargs: object):
+                if command and command[0] == "pacman":
+                    return CompletedProcess(command, 0, stdout=b"glibc\n", stderr=b"")
+                return real_run(command, *args, **kwargs)
+
+            with (
+                patch.object(engine, "analyze_elf_dependencies", return_value={}),
+                patch.object(engine, "confirm", return_value=True),
+                patch.object(engine, "run_hook", return_value=[]),
+                patch.object(engine.subprocess, "run", side_effect=isolated_run),
+            ):
+                apt_compat.run("apt-get", ["install", "-f", "-y"], config)
+                apt_compat.run("dpkg", ["-i", str(old_package)], config)
+                apt_compat.run("dpkg", ["-i", str(new_package)], config)
+
+            installed = engine.load_db(config)["debark-fixture"]
+            self.assertEqual(installed["version"], "1.1")
+            self.assertEqual(
+                (config.apps_root / "debark-fixture/usr/bin/fixture").read_bytes(),
+                new_payload,
+            )
+            self.assertFalse(marker.exists(), "Debian maintainer scripts must remain data only")
+            self.assertTrue(
+                apt_compat._parse("apt-get", ["-f", "install", "-y"], engine).fix_broken
+            )
+
+    def test_apt_compat_dispatch_requires_installer_opt_in(self) -> None:
+        config = object.__new__(engine.Config)
+        config.apt_compat_enabled = False
+        args = type("Args", (), {})()
+        with self.assertRaises(engine.DebArkError):
+            engine.cmd_apt_compat(args, config)
 
 
 class ExperimentalFeatureTests(unittest.TestCase):

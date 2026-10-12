@@ -31,6 +31,12 @@ def _load_project_package() -> None:
 
 _load_project_package()
 
+_apt_tool = Path(sys.argv[0]).name
+if _apt_tool in {"apt", "apt-get", "apt-cache", "dpkg"}:
+    _invoked_arguments = sys.argv[1:]
+    sys.argv[0] = str(Path(sys.argv[0]).resolve())
+    sys.argv[1:] = ["apt-compat", _apt_tool, *_invoked_arguments]
+
 from debark.cli import main  # noqa: E402
 
 

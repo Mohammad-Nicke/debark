@@ -2,13 +2,13 @@
 
 ## Installer and system packages
 
-The installer always downloads the current project source archive from GitHub, then reads `dependencies/required-arch.txt`. It first asks pacman to install missing packages from the machine's configured repositories, using `sudo` or `doas` when needed. If that transaction fails, it can download the current x86_64 package bundle from the existing `0.1` GitHub Release. The weekly bundle contains the full dependency closure resolved from Arch's sync database, plus upstream signatures and checksums, and is rejected after 14 days. Pacman remains responsible for signature checks, dependency validation and the package transaction. The installer refuses to install a bundled package over an older installed version, which avoids partial system upgrades.
+The installer always downloads the current project source archive from GitHub, then reads `dependencies/required-arch.txt`. It first asks pacman to install missing packages from the machine's configured repositories, using `sudo` or `doas` when needed. If that transaction fails, it can download the current x86_64 package bundle from the existing `0.1` GitHub Release. The weekly bundle contains the full dependency closure resolved from Arch's sync database, plus upstream signatures and checksums. Because Arch is a rolling release, the installer recommends a bundle no older than 14 days. An older bundle prompts for one-install consent, or can be accepted for non-interactive use through DEBARK_ALLOW_STALE_BUNDLE=1. This bypasses only the age check. Pacman remains responsible for signature checks, dependency validation and the package transaction. The installer refuses to install a bundled package over an older installed version, which avoids partial system upgrades.
 
 When a DebArk installation already exists in the selected mode, the installer stages the new Python package and entry point and replaces those program files. The existing configuration and data directories are not removed: repository definitions, package records, snapshots, and DebArk's own caches remain in place. The detected existing mode becomes the interactive default. A self-update passes the current mode directly to the installer and preserves existing preferences.
 
 The package archive is published as a GitHub Release asset rather than stored in the Git source tree. Its existing asset is refreshed weekly without creating a version or tag. The installer downloads this bundle from GitHub when needed; it does not accept a locally supplied bundle, so installation requires an internet connection.
 
-The required packages are Python and GNU binutils. Python runs DebArk, and binutils provides `ar` for reading Debian packages. Tools for optional features, such as signature checking or sandbox launchers, are not required for a normal install.
+The required packages are Python, GNU binutils, OpenSSL, libarchive, and zstd. Python runs DebArk, binutils provides `ar` for reading Debian packages, and libarchive plus zstd provide the tools used to build local ALPM packages for system-mode apps. Optional sandbox runtimes are not required for a normal install.
 
 `debark update` refreshes the local dependency map and pacman's file-provider database, then checks the installed version against `src/debark/__init__.py` on the project's `main` branch. `debark upgrade` checks app versions in previously synced beta indexes, then performs the same DebArk version check. A newer DebArk version is shown with its matching changelog section and requires an interactive confirmation before the installer is downloaded and run. The installer stays in the current system or user mode; it does not replace Debian apps.
 
@@ -31,23 +31,23 @@ The runtime uses the Python standard library. System dependencies are invoked wi
 6. Copy payload into a private staging directory, record hashes and xattrs, generate wrappers, verify the staged result, then rename the app tree into place.
 7. Save the v3 manifest, database record, optional local snapshot, and append-only audit event.
 
-Debian maintainer scripts are never invoked. The payload remains inside one package directory. Generated launchers and desktop files are separately tracked and are not overwritten when a path already exists.
+Debian maintainer scripts are never invoked. In system mode, DebArk builds a small local ALPM package named `debark-app-PACKAGE`, with the Debian payload under `/opt/PACKAGE` and generated launchers and desktop entries in managed system locations. Pacman owns those files and handles package upgrades and removal. User mode keeps the payload and launchers in the user's directories without registering a system package. Existing paths are not silently overwritten.
 
 ## State
 
 System mode uses `/etc/debark` and `/var/lib/debark`; user mode uses the caller's `~/.config/debark` and `~/.local/share/debark`. The database is a v3 envelope containing package manifests. A lock file serializes database updates, and writes use a same-directory temporary file followed by atomic replacement.
 
-Each package record includes source metadata, source SHA256, installation mode, dependencies, ELF analysis, license declarations, and file records. File records contain a path, SHA256, size, mode, and whether the optional xattr marker was written. The audit log is JSON Lines. Local restore points contain a compressed payload archive plus the corresponding manifest.
+Each package record includes source metadata, source SHA256, installation mode, dependencies, ELF analysis, license declarations, and file records. File records contain a path, SHA256, size, mode, and whether the optional xattr marker was written. User-mode app markers can be refreshed from the central database; system-mode markers are part of the pacman-owned package and are never rewritten by database migration. If the central system inventory is lost, DebArk rebuilds records from the namespaced pacman package and its file list. The `fix` command migrates older records, then only offers explicit adoption for unregistered app directories that match DebArk markers or a Debian payload layout. The audit log is JSON Lines. Local restore points contain a compressed payload archive plus the corresponding manifest.
 
 ## Trust boundaries
 
 - Archive paths are validated before extraction. Symlinks are normalized and must resolve inside the extraction root.
 - Pacman-owned paths are not destinations for package payload. Existing launcher and desktop paths are rejected.
-- Removal checks recorded hashes and containment before unlinking. User-modified content is kept.
+- System package removal and upgrades go through pacman. For legacy unmanaged records, removal checks pacman ownership, recorded hashes, and path containment before unlinking. User-modified and pacman-owned content is kept.
 - Rollback checks the snapshot and manifest hashes before swapping the app directory. Untracked current files block rollback.
 - Package scripts are data only and are never executed by DebArk.
 - Sandbox support is an optional launcher integration with Firejail or bubblewrap. It disables networking, uses a temporary home and private temporary/device views, and exposes the system filesystem read-only. It is not enabled by default, may break apps that need networking or persistent settings, and is not a reliable security boundary for hostile applications.
-- Experimental APT sync verifies signed Release metadata with a caller-selected keyring before accepting index checksums. Experimental package downloads are checked against the signed index before DebArk extracts them. The beta path does not yet update an already-installed package transactionally.
+- Experimental APT sync verifies signed Release metadata with a caller-selected keyring before accepting index checksums. Experimental package downloads are checked against the signed index before DebArk extracts them. Opt-in apt, apt-get, apt-cache, and dpkg symlinks dispatch through the verified DebArk entry point. `dpkg -i` sends local Debian packages through DebArk's install flow, while `apt-get install -f` without operands reconciles the DebArk inventory. Package changes remain individual DebArk transactions; unsupported operations fail rather than invoking Debian maintainer scripts or changing unrelated system packages.
 
 ## Deferred interfaces
 
