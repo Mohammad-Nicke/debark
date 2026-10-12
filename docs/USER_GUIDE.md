@@ -6,7 +6,7 @@ This guide covers installing DebArk, installing Debian applications on Arch Linu
 
 DebArk reads Debian `.deb` packages and places each application's files in its own managed directory. It records the files and their hashes, creates launchers where possible, and can inspect, verify, repair, snapshot, roll back, or remove managed applications.
 
-DebArk does not replace pacman, register Debian packages in pacman's database, or run Debian maintainer scripts such as `postinst`. Some applications depend on those scripts or Debian-specific services and may need manual setup. An installed application still runs with your normal user permissions; an isolated installation directory is not a security sandbox.
+DebArk does not replace pacman or run Debian maintainer scripts such as `postinst`. System-mode app installs are registered with pacman under a DebArk-specific package name; the Debian package itself is not treated as an Arch repository package. Some applications depend on maintainer scripts or Debian-specific services and may need manual setup. An installed application still runs with your normal user permissions; an isolated installation directory is not a security sandbox.
 
 ## Install or update DebArk
 
@@ -49,6 +49,7 @@ For a local package or direct URL:
 
 ```sh
 debark install ./application.deb
+debark install --arch-system ./application.deb
 debark install https://example.org/application.deb
 ```
 
@@ -58,13 +59,14 @@ Use `--user` for per-user app files and records:
 debark install --user ./application.deb
 ```
 
-Before installing, DebArk reads package metadata, checks archive paths, resolves declared dependencies, and shows a plan. In system mode it can offer mapped Arch dependencies to pacman. A name that is only a low-confidence suggestion is not installed automatically.
+Before installing, DebArk reads package metadata, checks archive paths, resolves declared dependencies, and shows a plan. In system mode, the app is registered with pacman as `debark-app-PACKAGE` while its Debian payload stays under `/opt/PACKAGE`. `--arch-system` makes system mode explicit for scripts; it cannot be combined with `--user`, and plain system installs use the same pacman-managed path. DebArk can offer mapped Arch dependencies to pacman. A name that is only a low-confidence suggestion is not installed automatically.
 
 Common install options:
 
 | Option | Effect |
 | --- | --- |
 | `--dry-run` | Show the proposed work without installing the app. |
+| `--arch-system` | Explicitly require system mode and pacman registration; cannot be combined with `--user`. |
 | `--no-deps` | Leave missing Arch dependencies for you to install yourself. |
 | `--yes` | Accept DebArk prompts without pausing. |
 | `--snapshot` | Save a restore point after installation. |
@@ -88,6 +90,8 @@ debark remove APP
 ```
 
 `info FILE.deb` inspects a package before installation; `info APP` shows a registered app. `verify` checks managed files against their saved hashes. `repair` attempts to restore missing or changed managed files from the recorded source. `remove` deletes unchanged managed files and leaves user-modified files in place.
+
+System packages can also be queried or removed by pacman. DebArk keeps its own records for Debian metadata and recovery; if a package is removed directly with pacman, DebArk stops listing it after checking pacman's database.
 
 DebArk also accepts familiar single-action pacman and dpkg shortcuts:
 
@@ -127,6 +131,10 @@ The `--sandbox` option creates a launcher using bubblewrap or Firejail if one is
 
 Sandboxing is optional because it can break applications that need a network, persistent settings, or desktop-session services. It is an extra restriction, not a guarantee that an unknown application is safe. If the requested sandbox runtime is missing at launch time, the generated launcher stops with an error instead of silently running the app without the sandbox.
 
+## Recover an older installation
+
+Run `debark fix` after upgrading if package records are missing or use an older layout. It migrates saved records and reconstructs system-mode entries from pacman's database. `debark scan` lists older app directories that may belong to DebArk. After reviewing them, `debark fix --adopt` asks before registering each candidate. Adoption records current files and hashes; it does not reinstall the app or run Debian maintainer scripts. Files in legacy system launcher and desktop directories are adopted only when they still carry a DebArk ownership marker, and pacman-owned files are left alone.
+
 ## Optional Debian repositories and security checks
 
 The APT integration is an opt-in beta feature. Enable it in the installer or with:
@@ -146,7 +154,28 @@ debark repo info PACKAGE --repo debian
 debark repo install debian PACKAGE
 ```
 
-The beta path accepts HTTPS repositories, verifies signed Release metadata with the supplied keyring, checks index metadata and downloaded package hashes, and supports amd64 indexes. DebArk does not import keys or choose which publishers to trust. It can install a new app from a synced index, but it cannot yet update an app already installed from APT transactionally.
+The beta path accepts HTTPS repositories, verifies signed Release metadata with the supplied keyring, checks index metadata and downloaded package hashes, and supports amd64 indexes. DebArk does not import keys or choose which publishers to trust. Its APT-compatible wrappers are a separate installer choice and require this preview to be enabled.
+
+When enabled, the wrappers support common requests for DebArk-managed applications:
+
+```sh
+apt-get update
+apt-get install PACKAGE
+apt-get install --only-upgrade PACKAGE
+apt-get install -f -y
+apt-get upgrade
+apt-get remove PACKAGE
+apt-cache search TEXT
+apt-cache show PACKAGE
+apt list --installed
+dpkg --status PACKAGE
+dpkg --listfiles PACKAGE
+dpkg -i /path/to/package.deb
+```
+
+Package versions from repositories come from the verified indexes you have synced. APT package dependencies are handled through DebArk's Debian-to-Arch mapping; DebArk does not implement the full APT dependency solver. `apt-get install -f -y` without package names asks DebArk to reconcile its installed-app inventory, then returns so an updater can install a local package. `dpkg -i FILE.deb` sends each local package through DebArk's install or replacement flow, including dependency checks and the normal DebArk records. It does not register the package in dpkg's database. Batch changes run as separate app transactions, so an error partway through can leave earlier successful operations in place. The wrappers do not run Debian maintainer scripts. Operations that could change or remove unrelated system packages, including `full-upgrade`, `dist-upgrade`, `autoremove`, and direct dpkg database changes, are rejected. Existing system commands are left untouched, though the opt-in wrapper in `/usr/local/bin` or `~/.local/bin` may be found first through PATH. A privileged updater must have `/usr/local/bin` before system command directories in its sanitized PATH for these aliases to be selected.
+
+The dpkg wrapper supports package listing, status, file listing, architecture queries, and local installation with `-i` or `--install`. Other dpkg mutations such as `--unpack` or `--configure` are rejected. The wrappers cover common package operations; they do not reproduce every APT option or output format. Unknown commands and options produce an error instead of being passed to the original APT binary.
 
 With the preview enabled, `debark cve --suite bookworm` compares recorded Debian app versions against Debian Security Tracker data. Results are best-effort; confirm advisories with Debian before acting. Only suites present in the fetched tracker data are accepted.
 
@@ -189,4 +218,4 @@ System mode uses `/etc/debark` and `/var/lib/debark`; per-user mode uses `~/.con
 
 Run `debark --help`, `debark help install`, or `man debark` for command details. Report security issues using [SECURITY.md](../SECURITY.md), and see [ARCHITECTURE.md](ARCHITECTURE.md) for implementation notes.
 
-DebArk is maintained by **Mr.Nick (Mohammad Nick)**. New material is distributed under the [DebArk Source-Available License 1.0](../LICENSE): it allows use of the complete, unmodified program, but not customized versions or reuse of code fragments. The project is source-available, not open source. Earlier MIT-licensed copies remain under their original terms; see [LICENSE-MIT-LEGACY](../LICENSE-MIT-LEGACY).
+DebArk is maintained by **Mr.Nick (Mohammad Nick)**. It is distributed under the [DebArk Source-Available License 1.0](../LICENSE): it allows use of the complete, unmodified program, but not customized versions or reuse of code fragments. The project is source-available, not open source.

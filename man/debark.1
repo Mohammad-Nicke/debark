@@ -1,4 +1,4 @@
-.TH DEBARK 1 "October 2026" "DebArk 0.1.2" "User Commands"
+.TH DEBARK 1 "October 2026" "DebArk 0.1.3" "User Commands"
 .SH NAME
 debark \- install Debian packages on Arch Linux
 .SH SYNOPSIS
@@ -7,7 +7,7 @@ debark \- install Debian packages on Arch Linux
 .RI command
 .RI [ options ]
 .SH DESCRIPTION
-DebArk safely extracts Debian package payloads into per-package application directories on Arch Linux. It does not execute Debian maintainer scripts and does not copy package payload into system library directories.
+DebArk installs Debian package payloads on Arch Linux without executing Debian maintainer scripts. System-mode installs are registered with pacman as namespaced debark-app-PACKAGE packages; payload files stay under /opt/PACKAGE. User-mode installs stay in the user's home directory and do not register with pacman.
 .SH COMMANDS
 .TP
 .B install PACKAGE.deb|URL
@@ -15,7 +15,7 @@ Analyze and install a local Debian package or direct HTTP(S) URL.
 .B install also accepts the pacman-style -S and dpkg-style -i shortcuts.
 .TP
 .B remove PACKAGE
-Remove unchanged files registered to a DebArk package.
+Remove a DebArk-managed package. System-mode packages are removed through pacman.
 .B remove also accepts -R and -r.
 .TP
 .B list, info, search, files, verify
@@ -24,6 +24,9 @@ Inspect managed packages and package contents.
 .TP
 .B repair PACKAGE
 Restore damaged application payload files from the recorded source package.
+.TP
+.B fix [--adopt]
+Migrate older DebArk records and recover package entries from pacman's database. With --adopt, ask before registering detected legacy app directories.
 .TP
 .B snapshot PACKAGE
 Save the current managed application tree as a local restore point.
@@ -44,12 +47,17 @@ Compare installed Debian packages with Debian Security Tracker data. Experimenta
 Refresh local dependency metadata and pacman's file-provider database, then check for a DebArk update. If one is available, show its changelog notes and ask before installing it.
 .TP
 .B upgrade
-Show newer versions available in already-synced experimental APT indexes, then check for a DebArk update. App versions are not replaced automatically; a DebArk update is offered separately.
+Show newer versions available in already-synced experimental APT indexes, then check for a DebArk update. App versions are not replaced by this command; a DebArk update is offered separately.
 .B upgrade also accepts the pacman-style -Qu shortcut. update accepts -Fy.
+.SH APT COMPATIBILITY
+The installer can optionally add apt, apt-get, apt-cache, and dpkg command aliases. They route supported operations to DebArk-managed applications. Repository operations require the experimental APT preview plus a configured, synced repository. The wrappers support common install, update, upgrade, remove, search, and query operations; dpkg queries are read-only, while dpkg -i routes local .deb packages through DebArk's install and replacement flow. apt-get install -f without package names runs DebArk inventory recovery. They do not implement every APT option or the full Debian dependency solver, and they never execute Debian maintainer scripts. Unsupported commands fail explicitly. Existing system commands remain on disk, but the DebArk aliases may take precedence through PATH.
 .SH OPTIONS
 .TP
 .BR -u , " --user"
 Use per-user paths. Without this option, system mode is used. A trusted system installation requests access through sudo or doas when needed.
+.TP
+.B --arch-system
+Explicitly require system mode and pacman package registration. It cannot be combined with --user; plain system-mode installs use the same integration.
 .TP
 .BR -y , " --yes"
 Skip DebArk confirmation prompts.
@@ -95,4 +103,4 @@ Maintained by Mr.Nick (Mohammad-Nicke).
 .PP
 Repository: https://github.com/Mohammad-Nicke/debark
 .SH LICENSE
-Copyright (c) 2026 Mr.Nick (Mohammad Nick). New material is distributed under the DebArk Source-Available License 1.0; see LICENSE in the project repository. Earlier MIT-licensed copies remain under their original terms.
+Copyright (c) 2026 Mr.Nick (Mohammad Nick). DebArk is distributed under the DebArk Source-Available License 1.0; see LICENSE in the project repository.

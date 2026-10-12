@@ -1,6 +1,6 @@
 # DebArk Fish completion · Mr.Nick (@Mohammad-Nicke)
 # https://github.com/Mohammad-Nicke/debark
-set -l commands install remove list search info files verify scan update upgrade config doctor repo cve repair gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about -S -i -R -r -Q -l -Qs -Ss -Qi -s -Si -Ql -L -Qk -V -Fy -Qu
+set -l commands install remove list search info files verify scan update upgrade config doctor repo cve repair fix gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about -S -i -R -r -Q -l -Qs -Ss -Qi -s -Si -Ql -L -Qk -V -Fy -Qu
 complete -c debark -f -n '__fish_use_subcommand' -a "$commands"
 complete -c debark -s S -d 'Install a Debian package (pacman-style)'
 complete -c debark -s i -d 'Install a Debian package (dpkg-style)'
@@ -15,6 +15,8 @@ complete -c debark -s u -l user -d 'Use per-user paths'
 complete -c debark -s y -l yes -d 'Skip confirmation prompts'
 complete -c debark -l dry-run -d 'Preview without installing'
 complete -c debark -l no-deps -d 'Skip dependency installation'
+complete -c debark -l arch-system -d 'Require system-wide pacman package registration'
+complete -c debark -l adopt -d 'Confirm adoption of older application directories'
 complete -c debark -l no-color -d 'Disable colored output'
 complete -c debark -s q -l quiet -d 'Suppress informational output'
 complete -c debark -s v -l verbose -d 'Show diagnostic details'

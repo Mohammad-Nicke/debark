@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import copy
 import fcntl
 import getpass
 import hashlib
@@ -29,7 +30,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 from . import __license__, __maintainer__, __url__, __version__
 from . import experimental
@@ -44,20 +45,25 @@ XATTR_PKG = "user.debark.pkg"
 XATTR_VERSION = "user.debark.version"
 XATTR_INSTALLED = "user.debark.installed"
 XATTR_HASH = "user.debark.sha256"
+LEGACY_BIN_DIR = Path("/usr/local/bin")
+LEGACY_DESKTOP_DIR = Path("/usr/local/share/applications")
 PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]{0,127}$")
 COMMAND_NAME = re.compile(r"^[A-Za-z0-9_.+-]+$")
 DB_SCHEMA_VERSION = 3
+APP_MARKER = Path(".debark/manifest.json")
 SYSTEM_ACCESS_COMMANDS = frozenset({
     "install", "remove", "list", "search", "files", "verify", "scan", "update",
     "upgrade", "repo", "cve", "config", "repair", "gc", "log", "stats", "snapshot",
-    "rollback", "export", "import", "bulk", "watch", "profile", "plugin", "pin",
+    "rollback", "export", "import", "bulk", "watch", "profile", "plugin", "pin", "fix",
+    "apt-compat",
     "license",
 })
 COMMAND_NAMES = frozenset({
     "install", "remove", "list", "search", "info", "files", "verify", "scan",
     "update", "upgrade", "config", "doctor", "repo", "cve", "repair", "gc",
     "log", "stats", "snapshot", "rollback", "extract", "convert", "export",
-    "import", "bulk", "watch", "profile", "plugin", "pin", "license", "help",
+    "import", "bulk", "watch", "profile", "plugin", "pin", "license", "fix", "help",
+    "apt-compat",
     "about",
 })
 COMMAND_SHORTCUTS = {
@@ -234,6 +240,7 @@ class Config:
         self.auto_yes = False
         self.colors = True
         self.experimental_features = False
+        self.apt_compat_enabled = False
         self.threads = 4
         self._load()
 
@@ -245,10 +252,10 @@ class Config:
         if self.mode == "system":
             self.cfg_dir = Path("/etc/debark")
             self.data_dir = Path("/var/lib/debark")
-            self.bin_dir = Path("/usr/local/bin")
+            self.bin_dir = Path("/usr/bin")
             self.apps_root = Path("/opt")
-            self.desktop_root = Path("/usr/local/share/applications")
-            self.icons_root = Path("/usr/local/share/icons/hicolor")
+            self.desktop_root = Path("/usr/share/applications")
+            self.icons_root = Path("/usr/share/icons/hicolor")
         else:
             home = self.home_dir
             self.cfg_dir = home / ".config/debark"
@@ -290,6 +297,9 @@ class Config:
         self.auto_yes = config_bool("auto_yes", self.auto_yes)
         self.colors = config_bool("colors", self.colors)
         self.experimental_features = config_bool("experimental_features", self.experimental_features)
+        self.apt_compat_enabled = config_bool(
+            "apt_compat_enabled", getattr(self, "apt_compat_enabled", False)
+        )
         try:
             self.threads = max(1, min(16, int(values.get("threads", self.threads))))
         except (TypeError, ValueError):
@@ -1021,21 +1031,166 @@ def manifest_files(entry: dict[str, Any]) -> list[dict[str, Any]]:
     return _normalize_manifest(name, entry).get("files", [])
 
 def load_db(cfg: Config) -> dict[str, Any]:
+    """Load inventory from app-local markers, falling back to legacy state files."""
+    discovered: dict[str, Any] = {}
+    if cfg.apps_root.is_dir() and not cfg.apps_root.is_symlink():
+        try:
+            app_dirs = sorted(cfg.apps_root.iterdir())
+        except OSError:
+            app_dirs = []
+        for app_dir in app_dirs:
+            if not app_dir.is_dir() or app_dir.is_symlink():
+                continue
+            marker = app_dir / APP_MARKER
+            try:
+                entry = json.loads(read_regular_text(marker))
+            except (DebArkError, OSError, ValueError):
+                continue
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            if cfg.mode == "system":
+                expected_alpm = _alpm_name(name) if isinstance(name, str) else ""
+                if (entry.get("alpm_package") != expected_alpm
+                        or pacman_owns(marker) != expected_alpm):
+                    continue
+            if (isinstance(name, str) and PACKAGE_NAME.fullmatch(name)
+                    and Path(entry.get("app_dir", "")).absolute() == app_dir.absolute()
+                    and entry.get("managed_by") == "DebArk"):
+                discovered[name] = _normalize_manifest(name, entry)
     try:
         value = json.loads(read_regular_text(cfg.db_file))
         if not isinstance(value, dict):
-            return {}
+            value = {}
         if value.get("schema_version") == DB_SCHEMA_VERSION and isinstance(value.get("packages"), dict):
             packages = value["packages"]
         else:
             packages = value
-        return {
+        legacy = {
             name: _normalize_manifest(name, entry)
             for name, entry in packages.items()
             if isinstance(name, str) and PACKAGE_NAME.fullmatch(name) and isinstance(entry, dict)
         }
     except (OSError, ValueError):
-        return {}
+        legacy = {}
+    if cfg.pkgs_dir.is_dir() and not cfg.pkgs_dir.is_symlink():
+        try:
+            for package_dir in cfg.pkgs_dir.iterdir():
+                name = package_dir.name
+                if not PACKAGE_NAME.fullmatch(name) or not package_dir.is_dir() or package_dir.is_symlink():
+                    continue
+                if name in legacy or name in discovered:
+                    continue
+                try:
+                    entry = json.loads(read_regular_text(package_dir / "manifest.json"))
+                except (DebArkError, OSError, ValueError):
+                    continue
+                if isinstance(entry, dict):
+                    legacy[name] = _normalize_manifest(name, entry)
+        except OSError:
+            pass
+    installed_alpm_names: set[str] | None = None
+    if cfg.mode == "system" and shutil.which("pacman"):
+        try:
+            installed_names = subprocess.run(
+                ["pacman", "-Qq"], check=False, capture_output=True, text=True,
+            )
+            if installed_names.returncode == 0:
+                output = installed_names.stdout
+                if isinstance(output, bytes):
+                    output = output.decode(errors="replace")
+                installed_alpm_names = set(output.splitlines())
+                legacy = {
+                    name: entry for name, entry in legacy.items()
+                    if entry.get("alpm_package") != _alpm_name(name)
+                    or entry.get("alpm_package") in installed_alpm_names
+                }
+                for alpm_name in sorted(installed_alpm_names):
+                    prefix = "debark-app-"
+                    if not alpm_name.startswith(prefix):
+                        continue
+                    name = alpm_name[len(prefix):]
+                    existing_entry = legacy.get(name)
+                    if (not PACKAGE_NAME.fullmatch(name) or name in discovered
+                            or (existing_entry is not None
+                                and existing_entry.get("alpm_package") != alpm_name)):
+                        continue
+                    identity_result = subprocess.run(
+                        ["pacman", "-Qi", alpm_name], check=False, capture_output=True,
+                        text=True, env={**os.environ, "LC_ALL": "C"},
+                    )
+                    identity: dict[str, str] = {}
+                    if identity_result.returncode == 0:
+                        identity_output = identity_result.stdout
+                        if isinstance(identity_output, bytes):
+                            identity_output = identity_output.decode(errors="replace")
+                        for line in identity_output.splitlines():
+                            match = re.match(r"^(Name|URL|Packager)\s*:\s*(.*)$", line)
+                            if match:
+                                identity[match.group(1)] = match.group(2).strip()
+                    if (identity.get("Name") != alpm_name or identity.get("URL") != REPO
+                            or identity.get("Packager") != AUTHOR):
+                        continue
+                    version_result = subprocess.run(
+                        ["pacman", "-Q", alpm_name], check=False, capture_output=True, text=True,
+                    )
+                    files_result = subprocess.run(
+                        ["pacman", "-Qlq", alpm_name], check=False, capture_output=True, text=True,
+                    )
+                    if files_result.returncode != 0:
+                        continue
+                    records = []
+                    file_output = files_result.stdout
+                    if isinstance(file_output, bytes):
+                        file_output = file_output.decode(errors="replace")
+                    for raw_path in file_output.splitlines():
+                        path = Path(raw_path)
+                        app_root = cfg.apps_root / name
+                        allowed = (
+                            _under(path, app_root)
+                            or str(path).startswith(f"/usr/bin/debark-{name}-")
+                            or str(path).startswith(f"/usr/share/applications/debark-{name}-")
+                        )
+                        if not path.is_absolute() or not allowed:
+                            records = []
+                            break
+                        if path.is_dir() and not path.is_symlink():
+                            continue
+                        try:
+                            metadata = path.lstat()
+                        except OSError:
+                            metadata = None
+                        records.append({
+                            "path": str(path), "sha256": path_digest(path) or "",
+                            "size": metadata.st_size if metadata else 0,
+                            "mode": f"{metadata.st_mode & 0o7777:04o}" if metadata else "0000",
+                            "xattr_set": _getxattr(path, XATTR_PKG) == name,
+                        })
+                    if not records or not any(_under(Path(record["path"]), app_root)
+                                              for record in records):
+                        continue
+                    app_dir = cfg.apps_root / name
+                    version_output = version_result.stdout
+                    if isinstance(version_output, bytes):
+                        version_output = version_output.decode(errors="replace")
+                    version_parts = version_output.strip().split(maxsplit=1)
+                    version = (
+                        version_parts[-1]
+                        if version_result.returncode == 0 and version_parts
+                        else str(existing_entry.get("version", "unknown")) if existing_entry else "unknown"
+                    )
+                    legacy[name] = _normalize_manifest(name, {
+                        **(existing_entry or {}),
+                        "name": name, "version": version, "mode": "system",
+                        "app_dir": str(app_dir), "files": records,
+                        "managed_by": "DebArk", "alpm_package": alpm_name,
+                        "recovered": True, "source_deb": "",
+                    })
+        except OSError:
+            pass
+    # App-local markers survive loss or migration of DebArk's central state.
+    legacy.update(discovered)
+    return legacy
 
 def save_db(cfg: Config, database: dict[str, Any], delete: set[str] | None = None) -> None:
     cfg.ensure()
@@ -1051,6 +1206,14 @@ def save_db(cfg: Config, database: dict[str, Any], delete: set[str] | None = Non
                 merged[name] = entry
             normalized = {name: _normalize_manifest(name, entry)
                           for name, entry in merged.items()}
+            if cfg.mode == "user":
+                for name, entry in normalized.items():
+                    app_dir = cfg.apps_root / name
+                    if (app_dir.is_dir() and not app_dir.is_symlink()
+                            and Path(entry.get("app_dir", "")).absolute() == app_dir.absolute()):
+                        marker = app_dir / APP_MARKER
+                        write_json(marker, entry)
+                        set_user_owner(marker)
             write_json(cfg.db_file, {
                 "schema_version": DB_SCHEMA_VERSION,
                 "generated_by": {
@@ -1062,9 +1225,33 @@ def save_db(cfg: Config, database: dict[str, Any], delete: set[str] | None = Non
             })
             if cfg.mode == "user":
                 set_user_owner(cfg.db_file)
+            for name in delete or set():
+                marker = cfg.apps_root / name / APP_MARKER
+                if cfg.mode == "user":
+                    marker.unlink(missing_ok=True)
+                elif marker.is_file() and not marker.is_symlink() and pacman_owns(marker) is None:
+                    try:
+                        marker_entry = json.loads(read_regular_text(marker))
+                    except (DebArkError, OSError, ValueError):
+                        marker_entry = {}
+                    if isinstance(marker_entry, dict) and marker_entry.get("name") == name:
+                        marker.unlink(missing_ok=True)
             fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
     except OSError as exc:
         raise DebArkError(f"Cannot update package database {cfg.db_file}: {exc}") from exc
+
+
+def _walk_managed_paths(root: Path) -> Iterator[Path]:
+    """Walk regular files and symlinks without following directory symlinks."""
+    if not root.is_dir() or root.is_symlink():
+        return
+    for current, directories, filenames in os.walk(root, followlinks=False):
+        base = Path(current)
+        directories[:] = [name for name in directories if not (base / name).is_symlink()]
+        for name in filenames:
+            path = base / name
+            if path.is_file() or path.is_symlink():
+                yield path
 
 def append_audit(cfg: Config, event: dict[str, Any]) -> None:
     cfg.audit_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1437,6 +1624,10 @@ def make_wrapper(path: Path, app_root: Path, executable: Path, cfg: Config,
                  payload_root: Path, sandbox: bool = False) -> None:
     relative = executable.relative_to(app_root)
     command = ["#!/bin/sh"]
+    if not sandbox and getattr(cfg, "mode", None) == "user":
+        command.append(
+            f"PATH={shlex.quote(str(cfg.bin_dir))}:\"${{PATH:-/usr/local/bin:/usr/bin:/bin}}\"; export PATH"
+        )
     libraries = [app_root / item.relative_to(payload_root)
                  for item in _private_library_dirs(payload_root)]
     if libraries:
@@ -1593,7 +1784,8 @@ def _install_desktops(data_dir: Path, app_root: Path, package: str, launcher: Pa
     created: list[Path] = []
     try:
         for index, source in enumerate(sources, start=1):
-            target = cfg.desktop_root / f"{package}-{index}-{source.name}"
+            prefix = f"debark-{package}" if cfg.mode == "system" else package
+            target = cfg.desktop_root / f"{prefix}-{index}-{source.name}"
             _safe_output_path(target, cfg, prior)
             target.parent.mkdir(parents=True, exist_ok=True)
             content = _desktop_content(source, launcher, icon)
@@ -1623,10 +1815,11 @@ def _write_launchers(executables: list[Path], main: Path | None, data_dir: Path,
         base_name = executable.name
         if not COMMAND_NAME.fullmatch(base_name):
             continue
-        name = base_name
+        name = (f"debark-{package}-{base_name}" if cfg.mode == "system" else base_name)
         if counts.get(base_name, 0) > 1:
             duplicate_numbers[base_name] = duplicate_numbers.get(base_name, 0) + 1
-            name = f"{package}-{base_name}-{duplicate_numbers[base_name]}"
+            prefix = f"debark-{package}" if cfg.mode == "system" else package
+            name = f"{prefix}-{base_name}-{duplicate_numbers[base_name]}"
         target = cfg.bin_dir / name
         if target.exists() or target.is_symlink():
             name = f"{package}-{base_name}"
@@ -1666,7 +1859,64 @@ def _arch_compatible(debian_arch: str) -> bool:
     }.get(current, {"all"})
     return debian_arch in expected
 
+
+def _alpm_name(package: str) -> str:
+    return f"debark-app-{package}"
+
+
+def _write_alpm_archive(root: Path, output: Path, *, name: str, version: str,
+                        description: str, arch: str, dependencies: list[str]) -> None:
+    """Build a namespaced ALPM package from an already validated staging tree."""
+    bsdtar = shutil.which("bsdtar")
+    zstd = shutil.which("zstd")
+    if not bsdtar or not zstd:
+        fail("Native pacman integration requires bsdtar and zstd.")
+    safe_version = re.sub(r"[^A-Za-z0-9@._+:]", "_", version).strip("._+:") or "0"
+    safe_description = re.sub(r"[\r\n\t]", " ", description).strip()[:512] or "Debian application managed by DebArk"
+    payload_size = sum(
+        path.lstat().st_size for path in root.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+    metadata = [
+        f"pkgname = {name}",
+        f"pkgbase = {name}",
+        "xdata = pkgtype=pkg",
+        f"pkgver = {safe_version}-1",
+        f"pkgdesc = {safe_description}",
+        f"url = {REPO}",
+        f"builddate = {int(time.time())}",
+        f"packager = {AUTHOR}",
+        f"size = {payload_size}",
+        f"arch = {arch}",
+    ]
+    metadata.extend(f"depend = {dependency}" for dependency in sorted(set(dependencies)))
+    (root / ".PKGINFO").write_text("\n".join(metadata) + "\n", encoding="utf-8")
+    members = [".PKGINFO", *sorted(
+        path.name for path in root.iterdir() if path.name != ".PKGINFO"
+    )]
+    tar_process = subprocess.Popen(
+        [bsdtar, "--create", "--format=gnutar", "--uid", "0", "--gid", "0",
+         "--numeric-owner", "--file", "-", "--directory", str(root), *members],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    assert tar_process.stdout is not None
+    with output.open("wb") as archive:
+        zstd_process = subprocess.Popen(
+            [zstd, "--quiet", "--compress", "--stdout", "--threads=0"],
+            stdin=tar_process.stdout, stdout=archive, stderr=subprocess.PIPE,
+        )
+        tar_process.stdout.close()
+        zstd_error = zstd_process.communicate()[1]
+    tar_error = tar_process.stderr.read() if tar_process.stderr else b""
+    tar_code = tar_process.wait()
+    if zstd_process.returncode or tar_code:
+        output.unlink(missing_ok=True)
+        detail = (zstd_error or tar_error).decode("utf-8", errors="replace").strip()
+        fail(f"Could not build the pacman package archive{': ' + detail if detail else '.'}")
+
 def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
+    if getattr(args, "arch_system", False) and cfg.mode != "system":
+        fail("--arch-system is only available for system installations; it cannot be used with --user.")
     if cfg.mode == "system" and os.geteuid() != 0:
         fail("System install requires root. Use --user for an unprivileged install.")
     if cfg.mode == "user" and os.geteuid() == 0 and os.environ.get("SUDO_USER"):
@@ -1716,6 +1966,10 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
     app_created = False
     db_saved = False
     package: str | None = None
+    package_stage: Path | None = None
+    previous_app_backup: Path | None = None
+    previous_entry_snapshot: dict[str, Any] | None = None
+    system_transaction_completed = False
     try:
         temp = Path(temp_owner.name)
         control, data_dir = extract_deb(source, temp)
@@ -1732,14 +1986,18 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
         pinned = load_pins(cfg).get(package)
         if pinned and pinned != version:
             fail(f"Package {package} is pinned to version {pinned}; source contains {version}.")
-        if package in prior_db:
-            fail(f"{package} is already registered. Remove it before installing another version.")
         if not _arch_compatible(architecture):
             fail(f"Package architecture {architecture} does not match this machine ({platform.machine()}).")
         license_values = detect_license(control, data_dir, package)
         final_app = cfg.apps_root / package
-        if final_app.exists() or final_app.is_symlink():
+        previous_entry = prior_db.get(package)
+        previous_entry_snapshot = copy.deepcopy(previous_entry) if previous_entry else None
+        if final_app.is_symlink():
             fail(f"Refusing to replace existing application directory: {final_app}")
+        if final_app.exists() and not previous_entry:
+            fail(f"An unregistered directory already exists at {final_app}; inspect it with 'debark scan' and migrate it with 'debark fix'.")
+        if previous_entry and Path(previous_entry.get("app_dir", "")).absolute() != final_app.absolute():
+            fail("Existing package metadata points outside its expected application directory.")
 
         debian_deps = parse_dep_list(control.get("Depends", ""))
         arch_deps: list[str] = []
@@ -1852,66 +2110,91 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
         source = retain_source_package(source, cfg, package, version,
                                       expected_digest=source_fingerprint)
 
-        cfg.apps_root.mkdir(parents=True, exist_ok=True)
-        app_stage = cfg.apps_root / f".{package}.staging-{os.getpid()}"
-        if app_stage.exists():
-            fail(f"Staging path already exists; refusing to replace it: {app_stage}")
-        app_stage.mkdir(mode=0o755)
-        written, hashes = copy_payload(data_dir, app_stage, cfg, package, version)
-        stage_path = app_stage
+        package_stage = Path(temp_owner.name) / "alpm-root"
+        staged_cfg = copy.copy(cfg)
+        if cfg.mode == "system":
+            app_stage = package_stage / "opt" / package
+            staged_cfg.apps_root = package_stage / "opt"
+            staged_cfg.bin_dir = package_stage / "usr/bin"
+            staged_cfg.desktop_root = package_stage / "usr/share/applications"
+            staged_cfg.icons_root = package_stage / "usr/share/icons/hicolor"
+            app_stage.parent.mkdir(parents=True, exist_ok=True)
+            stage_path = package_stage
+        else:
+            app_stage = cfg.apps_root / f".{package}.staging-{os.getpid()}"
+            if app_stage.exists():
+                fail(f"Staging path already exists; refusing to replace it: {app_stage}")
+            app_stage.mkdir(mode=0o755)
+            stage_path = app_stage
+        written, hashes = copy_payload(data_dir, app_stage, staged_cfg, package, version)
         launcher = _write_launchers(executables, main_exec, data_dir, app_stage, final_app,
-                                    package, cfg, written, hashes, prior_db,
+                                    package, staged_cfg, written, hashes, prior_db,
                                     sandbox=sandbox_requested,
                                     package_version=version)
-        created_outputs = [Path(path) for path in written if _under(Path(path), cfg.bin_dir)]
+        created_outputs = [Path(path) for path in written if _under(Path(path), staged_cfg.bin_dir)]
         if launcher:
-            _install_desktops(data_dir, final_app, package, launcher, cfg,
+            _install_desktops(data_dir, final_app, package, launcher, staged_cfg,
                               written, hashes, prior_db, package_version=version)
             created_outputs = [Path(path) for path in written
-                               if _under(Path(path), cfg.bin_dir) or _under(Path(path), cfg.desktop_root)]
-        os.replace(app_stage, final_app)
+                               if _under(Path(path), staged_cfg.bin_dir)
+                               or _under(Path(path), staged_cfg.desktop_root)]
         if cfg.mode == "user":
-            set_user_owner(final_app, recursive=True)
-        app_stage = None
-        app_created = True
-        relocated_files: list[str] = []
-        relocated_hashes: dict[str, str] = {}
-        for raw_path in written:
-            old_path = Path(raw_path)
+            if final_app.exists():
+                previous_app_backup = final_app.with_name(f".{package}.previous-{os.getpid()}")
+                os.replace(final_app, previous_app_backup)
             try:
-                relative = old_path.relative_to(stage_path)
-                new_path = final_app / relative
-            except ValueError:
-                new_path = old_path
-            relocated_files.append(str(new_path))
-            relocated_hashes[str(new_path)] = hashes.get(raw_path, "")
-            if cfg.mode == "user":
+                os.replace(app_stage, final_app)
+            except Exception:
+                if previous_app_backup and previous_app_backup.exists():
+                    os.replace(previous_app_backup, final_app)
+                raise
+            set_user_owner(final_app, recursive=True)
+            app_stage = None
+            app_created = True
+        if cfg.mode == "user":
+            relocated_files: list[str] = []
+            relocated_hashes: dict[str, str] = {}
+            for raw_path in written:
+                old_path = Path(raw_path)
+                try:
+                    relative = old_path.relative_to(stage_path)
+                    new_path = final_app / relative
+                except ValueError:
+                    new_path = old_path
+                relocated_files.append(str(new_path))
+                relocated_hashes[str(new_path)] = hashes.get(raw_path, "")
                 set_user_owner(new_path)
-        written, hashes = relocated_files, relocated_hashes
+            written, hashes = relocated_files, relocated_hashes
         if getattr(args, "verify_after", True):
-            mismatched = [path for path in written if path_digest(Path(path)) != hashes.get(path, "")]
+            mismatched = [
+                path for path in written
+                if path_digest(Path(path)) != hashes.get(path, "")
+            ]
             if mismatched:
-                fail(f"Post-install integrity check failed for {len(mismatched)} managed file(s).")
+                fail(f"Staging integrity check failed for {len(mismatched)} managed file(s).")
         installed_at = utc_now()
         file_records: list[dict[str, Any]] = []
         desktop_files: list[str] = []
         for raw_path in written:
-            path = Path(raw_path)
+            staged_path = Path(raw_path)
+            path = (Path("/") / staged_path.relative_to(package_stage)
+                    if cfg.mode == "system" and package_stage
+                    else staged_path)
             try:
-                metadata = path.lstat()
+                metadata = staged_path.lstat()
                 size = metadata.st_size
                 mode = f"{metadata.st_mode & 0o7777:04o}"
             except OSError:
                 size, mode = 0, "0000"
             file_records.append({
-                "path": raw_path,
-                "sha256": hashes.get(raw_path, ""),
+                "path": str(path),
+                "sha256": hashes.get(str(staged_path), ""),
                 "size": size,
                 "mode": mode,
-                "xattr_set": _getxattr(path, XATTR_PKG) == package,
+                "xattr_set": _getxattr(staged_path, XATTR_PKG) == package,
             })
             if _under(path, cfg.desktop_root):
-                desktop_files.append(raw_path)
+                desktop_files.append(str(path))
         database_entry = _normalize_manifest(package, {
             "schema_version": DB_SCHEMA_VERSION,
             "name": package,
@@ -1928,7 +2211,13 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
             "files": file_records,
             "desktop_files": desktop_files,
             "mime_types": [],
-            "exec_path": str(launcher) if launcher else "",
+            "exec_path": (
+                str(Path("/") / launcher.relative_to(package_stage))
+                if launcher and cfg.mode == "system" and package_stage
+                else str(launcher) if launcher else ""
+            ),
+            "managed_by": "DebArk",
+            "alpm_package": _alpm_name(package) if cfg.mode == "system" else "",
             "license": license_values,
             "debian_deps": debian_deps,
             "arch_deps": arch_deps,
@@ -1946,6 +2235,52 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
             "snapshot": None,
             "audit": [{"action": "install", "at": installed_at}],
         })
+        if cfg.mode == "system" and package_stage:
+            app_marker = package_stage / "opt" / package / APP_MARKER
+            app_marker.parent.mkdir(parents=True, exist_ok=True)
+            write_json(app_marker, database_entry)
+            alpm_name = _alpm_name(package)
+            installed_query = _run_checked(
+                ["pacman", "-Qq"], "Could not inspect the pacman package database"
+            )
+            installed_alpm_names = set(installed_query.stdout.decode(errors="replace").splitlines())
+            existing_alpm = alpm_name in installed_alpm_names
+            if existing_alpm and (not previous_entry or previous_entry.get("alpm_package") != alpm_name):
+                fail(f"Pacman package name {alpm_name} is already owned by an unrelated package.")
+            if final_app.exists() and not existing_alpm:
+                previous_app_backup = final_app.with_name(f".{package}.previous-{os.getpid()}")
+                os.replace(final_app, previous_app_backup)
+            archive_version = re.sub(r"[^A-Za-z0-9@._+:-]", "_", version) or "0"
+            archive = Path(temp_owner.name) / f"{alpm_name}-{archive_version}-1-any.pkg.tar.zst"
+            description_lines = str(
+                control.get("Description", f"Debian application {package}")
+            ).splitlines()
+            _write_alpm_archive(
+                package_stage, archive, name=alpm_name, version=version,
+                description=(description_lines[0] if description_lines else f"Debian application {package}"),
+                arch=_deb_to_arch_arch(architecture),
+                dependencies=arch_deps if not getattr(args, "no_deps", False) else [],
+            )
+            command = ["pacman", "-U"]
+            if args.yes or cfg.auto_yes:
+                command.append("--noconfirm")
+            command.append(str(archive))
+            try:
+                _run_checked(command, "Could not install the application package with pacman")
+            except Exception:
+                if previous_app_backup and previous_app_backup.exists():
+                    if final_app.exists():
+                        failed_tree = package_stage / f"failed-{package}"
+                        with contextlib.suppress(OSError):
+                            os.replace(final_app, failed_tree)
+                    os.replace(previous_app_backup, final_app)
+                    previous_app_backup = None
+                raise
+            system_transaction_completed = True
+            app_created = True
+            app_stage = None
+            if previous_entry_snapshot and not previous_entry_snapshot.get("alpm_package"):
+                _cleanup_legacy_system_outputs(previous_entry_snapshot)
         for repo_file in (data_dir / "etc/apt/sources.list", data_dir / "etc/apt/sources.list.d"):
             sources = [repo_file] if repo_file.is_file() else (
                 list(repo_file.glob("*.list")) if repo_file.is_dir() else [])
@@ -1984,28 +2319,44 @@ def cmd_install(args: argparse.Namespace, cfg: Config) -> None:
             except OSError:
                 pass
         ok(f"Installed {package} {version}.")
-        if launcher:
-            print(f"Run: {launcher}")
+        if database_entry.get("exec_path"):
+            print(f"Run: {database_entry['exec_path']}")
+        if previous_app_backup and previous_app_backup.exists():
+            warn(f"Previous application files were preserved at {previous_app_backup}")
         print(f"Remove: debark remove {package}")
     except Exception:
+        if system_transaction_completed:
+            warn("The pacman transaction completed; the installed package was left intact. Run 'debark fix' to refresh its registration if needed.")
+            if previous_app_backup and previous_app_backup.exists():
+                warn(f"Previous application files were preserved at {previous_app_backup}")
         if app_stage and app_stage.exists():
             shutil.rmtree(app_stage, ignore_errors=True)
-        if app_created and final_app and final_app.exists():
+        if app_created and cfg.mode == "user" and final_app and final_app.exists():
             shutil.rmtree(final_app, ignore_errors=True)
+        if previous_app_backup and previous_app_backup.exists() and final_app:
+            if final_app.exists() and cfg.mode == "user":
+                shutil.rmtree(final_app, ignore_errors=True)
+            if not final_app.exists():
+                os.replace(previous_app_backup, final_app)
         for output in created_outputs:
             output.unlink(missing_ok=True)
-        if db_saved and package:
-            prior_db.pop(package, None)
+        if db_saved and package and not system_transaction_completed:
             try:
-                save_db(cfg, {}, delete={package})
+                if previous_entry_snapshot is None:
+                    save_db(cfg, {}, delete={package})
+                else:
+                    save_db(cfg, {package: previous_entry_snapshot})
             except DebArkError:
                 pass
-        if package:
-            (cfg.pkgs_dir / package / "manifest.json").unlink(missing_ok=True)
-            try:
-                (cfg.pkgs_dir / package).rmdir()
-            except OSError:
-                pass
+        if package and not system_transaction_completed:
+            manifest_path = cfg.pkgs_dir / package / "manifest.json"
+            if previous_entry_snapshot is not None:
+                with contextlib.suppress(DebArkError):
+                    write_json(manifest_path, previous_entry_snapshot)
+            else:
+                manifest_path.unlink(missing_ok=True)
+                with contextlib.suppress(OSError):
+                    manifest_path.parent.rmdir()
         raise
     finally:
         temp_owner.cleanup()
@@ -2016,6 +2367,37 @@ def _under(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _cleanup_legacy_system_outputs(entry: dict[str, Any]) -> None:
+    """Remove only unchanged, unowned launchers from the former system paths."""
+    for record in manifest_files(entry):
+        raw_path = record.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        path = Path(raw_path)
+        allowed_root = next((root for root in (LEGACY_BIN_DIR, LEGACY_DESKTOP_DIR)
+                             if _under(path, root)), None)
+        if allowed_root is None or not (path.exists() or path.is_symlink()):
+            continue
+        try:
+            if not _under(path.parent.resolve(), allowed_root.resolve()):
+                continue
+        except OSError:
+            continue
+        if pacman_owns(path):
+            warn(f"Keeping pacman-owned legacy integration file: {path}")
+            continue
+        expected = record.get("sha256", "")
+        if not expected or path_digest(path) != expected:
+            warn(f"Keeping changed legacy integration file: {path}")
+            continue
+        if path.is_dir() and not path.is_symlink():
+            continue
+        try:
+            path.unlink()
+        except OSError as exc:
+            warn(f"Could not remove old DebArk integration file {path}: {exc}")
 
 def cmd_remove(args: argparse.Namespace, cfg: Config) -> None:
     if cfg.mode == "system" and os.geteuid() != 0:
@@ -2047,17 +2429,49 @@ def cmd_remove(args: argparse.Namespace, cfg: Config) -> None:
         for message in plugin_errors:
             warn(message)
         fail("Removal stopped because an enabled pre-remove hook failed.")
+    alpm_package = entry.get("alpm_package")
+    if cfg.mode == "system" and isinstance(alpm_package, str) and alpm_package == _alpm_name(package):
+        command = ["pacman", "-R"]
+        if args.yes or cfg.auto_yes:
+            command.append("--noconfirm")
+        command.append(alpm_package)
+        _run_checked(command, "Could not remove the DebArk application through pacman")
+        del database[package]
+        save_db(cfg, {}, delete={package})
+        manifest = cfg.pkgs_dir / package / "manifest.json"
+        manifest.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            manifest.parent.rmdir()
+        try:
+            append_audit(cfg, {"action": "remove", "package": package, "at": utc_now()})
+        except DebArkError as exc:
+            warn(str(exc))
+        for message in run_hook(cfg, "on_post_remove", plugin_context):
+            warn(message)
+        ok(f"Removed {package} through pacman.")
+        return
     removed = 0
     kept = 0
     for record, path in zip(file_records, files):
         inside_app = _under(path, app_dir) and _under(path.parent.resolve(), app_dir.resolve())
-        inside_bin = _under(path, cfg.bin_dir) and _under(path.parent.resolve(), cfg.bin_dir.resolve())
-        inside_desktop = _under(path, cfg.desktop_root) and _under(path.parent.resolve(), cfg.desktop_root.resolve())
+        inside_bin = (
+            (_under(path, cfg.bin_dir) and _under(path.parent.resolve(), cfg.bin_dir.resolve()))
+            or (_under(path, LEGACY_BIN_DIR) and _under(path.parent.resolve(), LEGACY_BIN_DIR.resolve()))
+        )
+        inside_desktop = (
+            (_under(path, cfg.desktop_root) and _under(path.parent.resolve(), cfg.desktop_root.resolve()))
+            or (_under(path, LEGACY_DESKTOP_DIR)
+                and _under(path.parent.resolve(), LEGACY_DESKTOP_DIR.resolve()))
+        )
         if not (inside_app or inside_bin or inside_desktop):
             warn(f"Skipped path outside managed directories: {path}")
             kept += 1
             continue
         if not (path.exists() or path.is_symlink()):
+            continue
+        if cfg.mode == "system" and pacman_owns(path):
+            warn(f"Keeping pacman-owned file outside the DebArk package transaction: {path}")
+            kept += 1
             continue
         expected = record.get("sha256", "")
         actual = path_digest(path)
@@ -2073,6 +2487,8 @@ def cmd_remove(args: argparse.Namespace, cfg: Config) -> None:
         except OSError as exc:
             warn(f"Could not remove {path}: {exc}")
             kept += 1
+    del database[package]
+    save_db(cfg, {}, delete={package})
     if app_dir.exists():
         candidates = sorted((p for p in app_dir.rglob("*") if p.is_dir() and not p.is_symlink()),
                             key=lambda p: len(p.parts), reverse=True)
@@ -2081,12 +2497,10 @@ def cmd_remove(args: argparse.Namespace, cfg: Config) -> None:
                 directory.rmdir()
             except OSError:
                 pass
-    try:
-        app_dir.rmdir()
-    except OSError:
-        pass
-    del database[package]
-    save_db(cfg, {}, delete={package})
+        try:
+            app_dir.rmdir()
+        except OSError:
+            pass
     repos = load_repos(cfg)
     filtered = {name: value for name, value in repos.items()
                 if value.get("added_by") != package}
@@ -2330,20 +2744,171 @@ def cmd_repair(args: argparse.Namespace, cfg: Config) -> None:
         fail(f"Repair completed with {len(errors)} error(s).")
 
 def cmd_scan(args: argparse.Namespace, cfg: Config) -> None:
-    found: dict[str, int] = {}
-    for root in (cfg.apps_root, cfg.bin_dir, cfg.desktop_root):
-        if not root.exists():
+    registered = load_db(cfg)
+    marked: dict[str, int] = {}
+    for path in _walk_managed_paths(cfg.apps_root):
+        name = _getxattr(path, XATTR_PKG)
+        if name:
+            marked[name] = marked.get(name, 0) + 1
+    candidates = _legacy_app_candidates(cfg, registered)
+    if not registered and not marked and not candidates:
+        print("No registered applications or legacy candidates were found.")
+        return
+    for package, entry in sorted(registered.items()):
+        print(f"Managed: {package} {entry.get('version', '?')} ({len(manifest_files(entry))} recorded files)")
+    for package, count in sorted(marked.items()):
+        if package not in registered:
+            print(f"Recoverable marker: {package} ({count} file xattr marker(s); run debark fix)")
+    for package, path in candidates:
+        print(f"Possible legacy install: {package} at {path} (not yet verified)")
+
+
+def _legacy_app_candidates(
+    cfg: Config, registered: dict[str, Any],
+) -> list[tuple[str, Path]]:
+    candidates: list[tuple[str, Path]] = []
+    if not cfg.apps_root.is_dir() or cfg.apps_root.is_symlink():
+        return candidates
+    try:
+        app_dirs = sorted(cfg.apps_root.iterdir())
+    except OSError:
+        return candidates
+    for app_dir in app_dirs:
+        name = app_dir.name
+        if (not PACKAGE_NAME.fullmatch(name) or name in registered
+                or not app_dir.is_dir() or app_dir.is_symlink()
+                ):
             continue
-        for path in root.rglob("*"):
-            if path.is_file() or path.is_symlink():
-                name = _getxattr(path, XATTR_PKG)
-                if name:
-                    found[name] = found.get(name, 0) + 1
-    if not found:
-        print("No DebArk markers found under the application directory.")
-    else:
-        for package, count in sorted(found.items()):
-            print(f"{package}: {count} file(s)")
+        has_debian_layout = ((app_dir / "usr/share/doc" / name).is_dir()
+                             or (app_dir / "usr/bin").is_dir()
+                             or (app_dir / "usr/lib").is_dir())
+        has_debark_markers = any(
+            _getxattr(path, XATTR_PKG) == name for path in _walk_managed_paths(app_dir)
+        )
+        if has_debark_markers or has_debian_layout:
+            candidates.append((name, app_dir))
+    return candidates
+
+
+def cmd_fix(args: argparse.Namespace, cfg: Config) -> None:
+    if cfg.mode == "system" and os.geteuid() != 0:
+        fail("System fix requires root. Use --user for a user installation.")
+    cfg.ensure()
+    database = load_db(cfg)
+    central_names: set[str] = set()
+    current_schema = False
+    try:
+        central_value = json.loads(read_regular_text(cfg.db_file))
+        if isinstance(central_value, dict):
+            central_packages = central_value.get("packages")
+            if not isinstance(central_packages, dict):
+                central_packages = central_value
+            central_names = {
+                name for name in central_packages
+                if isinstance(name, str) and PACKAGE_NAME.fullmatch(name)
+            }
+            current_schema = (
+                central_value.get("schema_version") == DB_SCHEMA_VERSION
+                and isinstance(central_value.get("packages"), dict)
+            )
+    except (DebArkError, OSError, ValueError):
+        pass
+    rebuilt_count = (
+        len(database) if not current_schema
+        else len(set(database) - central_names)
+    )
+    stale_names = central_names - set(database)
+    candidates = _legacy_app_candidates(cfg, database)
+    migrated = 0
+    for name, entry in database.items():
+        app_dir = cfg.apps_root / name
+        if app_dir.is_dir() and not app_dir.is_symlink():
+            normalized = _normalize_manifest(name, entry)
+            normalized["app_dir"] = str(app_dir)
+            changed = normalized != entry
+            marker = app_dir / APP_MARKER
+            if cfg.mode == "user" or not normalized.get("alpm_package"):
+                marker_current = False
+                if marker.is_file() and not marker.is_symlink():
+                    try:
+                        marker_current = json.loads(read_regular_text(marker)) == normalized
+                    except (DebArkError, OSError, ValueError):
+                        pass
+                marker_is_pacman_owned = (
+                    cfg.mode == "system" and marker.exists() and pacman_owns(marker) is not None
+                )
+                if marker_is_pacman_owned:
+                    if not marker_current:
+                        warn(f"Keeping pacman-owned manifest unchanged: {marker}")
+                elif not marker_current:
+                    if marker.is_symlink():
+                        warn(f"Skipping symlinked app manifest: {marker}")
+                    else:
+                        write_json(marker, normalized)
+                        changed = True
+            database[name] = normalized
+            if changed:
+                migrated += 1
+    if database or stale_names:
+        save_db(cfg, database, delete=stale_names)
+    if rebuilt_count:
+        ok(f"Rebuilt the central inventory for {rebuilt_count} installed application(s).")
+    if migrated:
+        ok(f"Restored {migrated} app-local manifest(s) from existing DebArk records.")
+    if not candidates:
+        if not migrated and not rebuilt_count:
+            print("No legacy DebArk applications need migration.")
+        return
+    section(f"Unregistered legacy candidates ({len(candidates)})")
+    for name, path in candidates:
+        print(f"  {name}: {path}")
+    if not getattr(args, "adopt", False):
+        print("Review candidates with 'debark scan'; adopt them with 'debark fix --adopt'.")
+        return
+    adopted = 0
+    for name, app_dir in candidates:
+        if not confirm(f"Adopt {name} from {app_dir} as a DebArk-managed application?",
+                       args.yes or cfg.auto_yes):
+            continue
+        records: list[dict[str, Any]] = []
+        adopted_paths = set(_walk_managed_paths(app_dir))
+        if cfg.mode == "system":
+            adopted_paths = {path for path in adopted_paths if not pacman_owns(path)}
+            for root in (cfg.bin_dir, LEGACY_BIN_DIR, cfg.desktop_root, LEGACY_DESKTOP_DIR):
+                for path in _walk_managed_paths(root):
+                    if _getxattr(path, XATTR_PKG) == name:
+                        if pacman_owns(path):
+                            warn(f"Skipping pacman-owned path during adoption: {path}")
+                            continue
+                        adopted_paths.add(path)
+        if not adopted_paths:
+            warn(f"Skipping {name}: no unowned files were found to register.")
+            continue
+        for path in sorted(adopted_paths):
+            metadata = path.lstat()
+            records.append({
+                "path": str(path), "sha256": path_digest(path) or "",
+                "size": metadata.st_size,
+                "mode": f"{metadata.st_mode & 0o7777:04o}",
+                "xattr_set": _getxattr(path, XATTR_PKG) == name,
+            })
+        entry = _normalize_manifest(name, {
+            "name": name, "version": "unknown", "mode": cfg.mode,
+            "managed_by": "DebArk", "app_dir": str(app_dir),
+            "installed_at": "", "source_deb": "",
+            "files": records, "audit": [{"action": "adopt", "at": utc_now()}],
+            "recovered": True,
+        })
+        database[name] = entry
+        marker = app_dir / APP_MARKER
+        if cfg.mode == "user" or pacman_owns(marker) is None:
+            write_json(marker, entry)
+        else:
+            warn(f"Keeping pacman-owned manifest unchanged: {marker}")
+        adopted += 1
+    if adopted:
+        save_db(cfg, database)
+        ok(f"Registered {adopted} confirmed legacy candidate(s).")
 
 
 def _load_repo_index(cfg: Config, repos: dict[str, Any], name: str) -> dict[str, Any]:
@@ -2723,8 +3288,6 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
         _require_experimental(cfg)
         if not PACKAGE_NAME.fullmatch(args.package):
             fail("Invalid Debian package name.")
-        if args.package in load_db(cfg):
-            fail("Updating an already-installed package is not available in the experimental preview yet.")
         if args.name not in repos:
             fail(f"Repository not found: {args.name}")
         try:
@@ -2732,6 +3295,11 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
             candidate = experimental.newest_package(index["packages"], args.package, args.version)
             if candidate is None:
                 fail(f"Package {args.package} was not found in the verified index.")
+            installed_entry = load_db(cfg).get(args.package)
+            if installed_entry:
+                current_version = str(installed_entry.get("version", "0"))
+                if experimental.compare_debian_versions(candidate["Version"], current_version) < 0:
+                    fail(f"Refusing to downgrade {args.package} from {current_version} to {candidate['Version']}.")
             package_path = cfg.cache_dir / "apt" / args.name / "packages" / (
                 f"{args.package}-{re.sub(r'[^A-Za-z0-9.+:~_-]', '_', candidate['Version'])}.deb"
             )
@@ -2758,6 +3326,13 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
                 set_user_owner(cfg.pkgs_dir / args.package, recursive=True)
     else:
         print("Use: debark repo add, remove, list, sync, or install")
+
+def cmd_apt_compat(args: argparse.Namespace, cfg: Config) -> None:
+    if not cfg.apt_compat_enabled:
+        fail("APT-compatible commands are disabled; enable them in the DebArk installer first.")
+    from .apt_compat import run
+
+    run(args.tool, args.apt_args, cfg)
 
 def cmd_config(args: argparse.Namespace, cfg: Config) -> None:
     allowed = {"auto_yes", "colors", "threads", "experimental_features"}
@@ -3368,6 +3943,7 @@ Commands:
   verify (-Qk, -V) PACKAGE          Check managed file hashes
   scan                      Find xattr markers under the app directory
   repair PACKAGE            Restore missing or damaged managed files
+  fix [--adopt]              Migrate records and recover older installations
   gc                        Clean orphaned DebArk markers
   update (-Fy)              Refresh Arch file metadata and local maps
   upgrade (-Qu)             Check for newer versions in synced beta APT indexes
@@ -3406,6 +3982,7 @@ Global options:
 
 Install options:
   -y, --yes                 Skip confirmation prompts
+  --arch-system             Explicitly request pacman-managed system installation
   --dry-run                 Preview without installing
   --no-deps                 Do not install mapped Arch dependencies
   --snapshot                Save a local restore point after install
@@ -3415,6 +3992,7 @@ Install options:
   --keyring FILE            Set the trusted verification keyring
 
 Package payload is kept under /opt/PACKAGE or ~/.local/opt/PACKAGE.
+System installations are registered as debark-app-PACKAGE in pacman's database.
 DebArk does not run Debian maintainer scripts.
 System commands from a trusted installation request access through sudo or doas.
 Shortcuts match common pacman/dpkg habits; they run one DebArk action and do not
@@ -3452,7 +4030,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", "-q", action="store_true", help="suppress informational output")
     parser.add_argument("--verbose", "-v", action="store_true", help="show diagnostic details")
     parser.add_argument("-tui", "--tui", action="store_true", help="start interactive mode")
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     def common(child: argparse.ArgumentParser) -> None:
         child.add_argument("--user", "-u", action="store_true", default=argparse.SUPPRESS)
         child.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS)
@@ -3464,6 +4042,8 @@ def build_parser() -> argparse.ArgumentParser:
     common(install)
     install.add_argument("deb")
     install.add_argument("-y", "--yes", action="store_true")
+    install.add_argument("--arch-system", action="store_true",
+                         help="use the system-wide pacman-managed installation (not available with --user)")
     install.add_argument("--dry-run", action="store_true")
     install.add_argument("--no-deps", action="store_true")
     snapshot_group = install.add_mutually_exclusive_group()
@@ -3488,6 +4068,12 @@ def build_parser() -> argparse.ArgumentParser:
                             ("doctor", "check prerequisites"), ("about", "show project details")):
         child = sub.add_parser(name, help=help_text)
         common(child)
+    fix = sub.add_parser("fix", help="migrate and recover installed DebArk applications")
+    common(fix)
+    fix.add_argument("--adopt", action="store_true",
+                     help="offer explicit adoption of unregistered legacy candidates")
+    fix.add_argument("-y", "--yes", action="store_true",
+                     help="confirm adoption prompts")
     for name, argument in (("info", "deb"), ("search", "query"), ("files", "package"),
                             ("verify", "package")):
         child = sub.add_parser(name)
@@ -3532,6 +4118,12 @@ def build_parser() -> argparse.ArgumentParser:
     repo_install.add_argument("--no-deps", action="store_true")
     repo_install.add_argument("--sandbox", action="store_true",
                               help="launch the app with the optional network-isolated sandbox")
+    apt_compat = sub.add_parser("apt-compat")
+    apt_compat.add_argument("tool", choices=("apt", "apt-get", "apt-cache", "dpkg"))
+    apt_compat.add_argument("apt_args", nargs=argparse.REMAINDER)
+    sub._choices_actions[:] = [
+        action for action in sub._choices_actions if action.dest != "apt-compat"
+    ]
     cve = sub.add_parser("cve", help="check advisories (experimental)")
     common(cve)
     cve.add_argument("--suite", required=True, help="Debian suite, such as bookworm")
@@ -3670,12 +4262,13 @@ def main() -> int:
         "verify": cmd_verify, "scan": cmd_scan, "update": cmd_update,
         "upgrade": cmd_upgrade, "repo": cmd_repo, "cve": cmd_cve, "config": cmd_config,
         "doctor": cmd_doctor, "about": cmd_about,
-        "repair": cmd_repair, "gc": cmd_gc, "log": cmd_log, "stats": cmd_stats,
+        "repair": cmd_repair, "fix": cmd_fix, "gc": cmd_gc, "log": cmd_log, "stats": cmd_stats,
         "snapshot": cmd_snapshot, "rollback": cmd_rollback, "extract": cmd_extract,
         "convert": cmd_convert, "export": cmd_export, "import": cmd_import,
         "bulk": cmd_bulk, "watch": cmd_watch, "profile": cmd_profile,
         "plugin": cmd_plugin, "pin": cmd_pin,
         "license": cmd_license,
+        "apt-compat": cmd_apt_compat,
     }
     try:
         if cfg.mode == "user" and os.geteuid() == 0 and os.environ.get("SUDO_USER"):

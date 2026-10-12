@@ -12,7 +12,9 @@ DebArk is a local helper for running Debian apps on Arch. This page is a quick g
 | `ar` and tar extraction with path checks | Implemented |
 | Maintainer-script execution | Never performed |
 | List, search, info, files, verify, remove | Implemented |
+| Pacman-managed system app packages | Implemented as `debark-app-PACKAGE`; user-mode apps stay per-user |
 | Manifest migration and per-package manifests | Implemented for legacy map and v3 data |
+| `fix` inventory recovery and legacy adoption | Recovers installed system entries from pacman; asks before adopting older app directories |
 | xattr package/version/hash/time markers | Best-effort, with manifest hash fallback |
 | Parallel payload copy | Implemented |
 | Repair from the saved package source | Implemented for payload files; external launchers need manual review |
@@ -53,13 +55,13 @@ The sandbox option adds a launcher that uses an already-installed bubblewrap or 
 | License inventory | Best effort from package control metadata and documentation |
 | CVE scan | Experimental opt-in; compares installed Debian versions to Debian Security Tracker data for a selected suite |
 | Debian source definition management | Saved locally; HTTPS only for experimental sync |
-| Signed APT index sync and new-package install | Experimental opt-in; detached Release signature, signed SHA256/size checks, and x86_64/amd64 only |
+| Signed APT index sync, package updates, and APT-compatible commands | Experimental opt-in; detached Release signature, signed SHA256/size checks, x86_64/amd64 only; `dpkg -i` routes local packages through DebArk and `apt-get install -f` reconciles DebArk inventory |
 | Search and inspect Debian repository packages | Experimental opt-in; works from synced, unexpired indexes without a network request |
 | Package-manager command shortcuts | Common pacman and dpkg forms for install, remove, list, search, info, files, verify and update checks |
 | Desktop entries and launch wrappers | Implemented; existing destinations are not replaced |
 | MIME, DBus, systemd, udev, cron and Polkit registration | Deferred |
 
-`update` refreshes Arch file-provider data used by dependency checks. `upgrade` can detect newer versions from experimental indexes, but it does not replace installed apps. Repository search and info also use only indexes already synced by the user. All APT and CVE features are opt-in beta and may fail.
+`update` refreshes Arch file-provider data used by dependency checks. `upgrade` can detect newer versions from experimental indexes. Opt-in `apt`, `apt-get`, and `apt-cache` wrappers can install or update DebArk-managed apps from synced indexes; `dpkg -i` installs or replaces a local `.deb` through DebArk, and `apt-get install -f` reconciles DebArk inventory. The wrappers do not emulate every APT command and reject operations outside the supported set. Repository search and info also use only indexes already synced by the user. All APT and CVE features are opt-in beta and may fail.
 
 ## Hosted and community capabilities
 

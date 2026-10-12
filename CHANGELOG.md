@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3 — 2026-10-12
+
+- Route `apt-get install -f` through DebArk's inventory recovery command.
+- Install or update a local Debian package through DebArk when an updater calls `dpkg -i`.
+- Keep the package payload and application records under DebArk management without running Debian maintainer scripts.
+- Register system-mode applications with pacman and recover their records with `debark fix`.
+- Let the installer offer a one-time choice when the signed dependency bundle is older than the recommended age.
+
 ## 0.1.2 — 2026-10-05
 
 - Prevent unrelated files beside the `debark` command from shadowing Python standard-library modules during startup.
@@ -11,7 +19,6 @@
 - Replace an existing DebArk installation in place, keeping preferences, Debian repository definitions, package records, snapshots and DebArk's own caches.
 - Keep the detected installation mode during a self-update and request administrator access through the existing trusted system command when needed.
 - Use a clearer terminal progress bar for package downloads and payload copies.
-- Retain copyright notices under the MIT License.
 
 ## 0.1 — 2026-10-05
 

@@ -505,6 +505,52 @@ else
     LICENSE_DIR="$USER_HOME/.local/share/licenses/debark"
 fi
 
+APT_COMPAT_ENABLED="false"
+APT_COMPAT_DEFAULT="n"
+if [ -f "$CFG_DIR/config.json" ]; then
+    if APT_COMPAT_CURRENT="$(python3 - "$CFG_DIR/config.json" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        config = json.load(stream)
+except (OSError, ValueError):
+    config = {}
+print("true" if isinstance(config, dict) and config.get("apt_compat_enabled") is True else "false")
+PY
+    )"; then
+        if [ "$APT_COMPAT_CURRENT" = "true" ]; then
+            APT_COMPAT_DEFAULT="y"
+            APT_COMPAT_ENABLED="true"
+        fi
+    fi
+fi
+for apt_tool in apt apt-get apt-cache dpkg; do
+    if [ -L "$BIN_DIR/$apt_tool" ] &&
+        [ "$(readlink -f -- "$BIN_DIR/$apt_tool" 2>/dev/null || true)" = "$BIN_DIR/debark" ]; then
+        APT_COMPAT_DEFAULT="y"
+        APT_COMPAT_ENABLED="true"
+    fi
+done
+if [ "${DEBARK_SELF_UPDATE:-0}" != "1" ] && [ -t 3 ]; then
+    printf '\n%sAPT-compatible commands%s: optional apt, apt-get, apt-cache, and dpkg shortcuts for DebArk-managed applications.\n' \
+        "$C_CYAN" "$C_RESET"
+    printf 'They use DebArk signed APT indexes, never run Debian maintainer scripts, and do not provide general-purpose APT/dpkg behavior.\n'
+    for apt_tool in apt apt-get apt-cache dpkg; do
+        existing_apt_tool="$(command -v "$apt_tool" || true)"
+        if [ -n "$existing_apt_tool" ] && [ "$existing_apt_tool" != "$BIN_DIR/$apt_tool" ]; then
+            printf '  Existing %s command: %s (left in place; the DebArk command may take precedence in PATH).\n' \
+                "$apt_tool" "$existing_apt_tool"
+        fi
+    done
+    if ask_yes_no "Install or keep the DebArk APT-compatible commands?" "$APT_COMPAT_DEFAULT"; then
+        APT_COMPAT_ENABLED="true"
+    else
+        APT_COMPAT_ENABLED="false"
+    fi
+fi
+
 AUTO_YES="false"
 COLORS="true"
 THREADS="4"
@@ -528,6 +574,21 @@ run_privileged() {
         "$@"
     fi
 }
+
+if [ "$APT_COMPAT_ENABLED" = "true" ]; then
+    for apt_tool in apt apt-get apt-cache dpkg; do
+        apt_wrapper="$BIN_DIR/$apt_tool"
+        if [ -L "$apt_wrapper" ]; then
+            [ "$(readlink -f -- "$apt_wrapper" 2>/dev/null || true)" = "$BIN_DIR/debark" ] ||
+                die "Refusing to replace an unrelated symbolic link: $apt_wrapper"
+        elif [ -e "$apt_wrapper" ]; then
+            die "Refusing to replace an existing command: $apt_wrapper"
+        fi
+        if pacman -Qo "$apt_wrapper" >/dev/null 2>&1; then
+            die "Refusing to replace a pacman-owned path: $apt_wrapper"
+        fi
+    done
+fi
 
 for target in "$BIN_DIR/debark" "$LIB_DIR/debark" \
     "$BASH_COMPLETION_DIR/debark" "$ZSH_COMPLETION_DIR/_debark" \
@@ -588,6 +649,17 @@ if ! run_privileged mv -fT -- "$ENTRYPOINT_STAGE" "$BIN_DIR/debark"; then
     run_privileged rm -f -- "$ENTRYPOINT_STAGE"
     die "Could not replace the DebArk command."
 fi
+for apt_tool in apt apt-get apt-cache dpkg; do
+    apt_wrapper="$BIN_DIR/$apt_tool"
+    if [ "$APT_COMPAT_ENABLED" = "true" ]; then
+        if [ ! -L "$apt_wrapper" ]; then
+            run_privileged ln -s -- "$BIN_DIR/debark" "$apt_wrapper"
+        fi
+    elif [ -L "$apt_wrapper" ] &&
+        [ "$(readlink -f -- "$apt_wrapper" 2>/dev/null || true)" = "$BIN_DIR/debark" ]; then
+        run_privileged rm -- "$apt_wrapper"
+    fi
+done
 run_privileged install -Dm 644 "$SOURCE_DIR/completions/debark.bash" \
     "$BASH_COMPLETION_DIR/debark"
 run_privileged install -Dm 644 "$SOURCE_DIR/completions/_debark" \
@@ -601,10 +673,11 @@ if [ -f "$SOURCE_DIR/LICENSE.fa" ]; then
 fi
 
 CONFIG_TMP="$TMP_DIR/config.json"
-python3 - "$CONFIG_TMP" "$AUTO_YES" "$COLORS" "$THREADS" "$EXPERIMENTAL_FEATURES" <<'PY'
+python3 - "$CONFIG_TMP" "$AUTO_YES" "$COLORS" "$THREADS" "$EXPERIMENTAL_FEATURES" \
+    "$APT_COMPAT_ENABLED" <<'PY'
 import json
 import sys
-path, auto_yes, colors, threads, experimental_features = sys.argv[1:]
+path, auto_yes, colors, threads, experimental_features, apt_compat = sys.argv[1:]
 config = {
     "managed_by": "DebArk",
     "maintainer": "Mr.Nick (@Mohammad-Nicke)",
@@ -613,6 +686,7 @@ config = {
     "colors": colors == "true",
     "threads": int(threads),
     "experimental_features": experimental_features == "true",
+    "apt_compat_enabled": apt_compat == "true",
 }
 with open(path, "w", encoding="utf-8") as stream:
     json.dump(config, stream, indent=2)
@@ -666,6 +740,41 @@ PY
     if [ "$INSTALL_MODE" = "user" ] && [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
         run_privileged chown "$INSTALL_UID:$INSTALL_GID" "$CFG_DIR/config.json"
     fi
+fi
+
+APT_COMPAT_CONFIG_HELPER="$TMP_DIR/set-apt-compat-config.py"
+cat > "$APT_COMPAT_CONFIG_HELPER" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+path, enabled = sys.argv[1:]
+with open(path, encoding="utf-8") as stream:
+    config = json.load(stream)
+if not isinstance(config, dict):
+    raise SystemExit("DebArk config must contain a JSON object")
+config["apt_compat_enabled"] = enabled == "true"
+fd, temporary = tempfile.mkstemp(prefix=".debark-config-", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        json.dump(config, stream, indent=2, ensure_ascii=False)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+except Exception:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+if [ "$INSTALL_MODE" = "system" ]; then
+    run_privileged python3 "$APT_COMPAT_CONFIG_HELPER" "$CFG_DIR/config.json" "$APT_COMPAT_ENABLED"
+else
+    python3 "$APT_COMPAT_CONFIG_HELPER" "$CFG_DIR/config.json" "$APT_COMPAT_ENABLED"
 fi
 
 if [ "$INSTALL_MODE" = "user" ] && [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
