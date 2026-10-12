@@ -1,0 +1,12 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = apt
+Target = dpkg
+
+[Action]
+Description = Check DebArk shortcuts after APT or dpkg packages change
+When = PostTransaction
+Exec = /usr/local/bin/debark fix-shortcuts --system-only --quiet

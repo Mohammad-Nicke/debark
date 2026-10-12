@@ -49,6 +49,11 @@ inside an Arch Linux container, and uploads the signed directory as the
 `debark-standalone-x86_64` workflow artifact. This does not create a tag or
 replace the source-based installer.
 
+The signed source archive includes the pacman post-transaction hook template.
+The online installer installs it under `/etc/pacman.d/hooks`; it calls the
+system DebArk command to check shortcut symlinks after `apt` or `dpkg` package
+operations.
+
 Nuitka is a packaging and compilation option, not a guarantee against
 reverse-engineering or a substitute for signed release verification. The
 standalone artifact is separate from the Python source install.
