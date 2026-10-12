@@ -346,9 +346,7 @@ class InstallLifecycleTests(unittest.TestCase):
             new_package_dir.mkdir()
             old_package = self.make_deb(old_package_dir, marker, version="1.0")
             new_payload = b"#!/bin/sh\nprintf 'fixture updated\\n'\n"
-            new_package = self.make_deb(
-                new_package_dir, marker, version="1.1", payload=new_payload
-            )
+            new_package = self.make_deb(new_package_dir, marker, version="1.1", payload=new_payload)
 
             config = object.__new__(engine.Config)
             config.mode = "user"
@@ -366,7 +364,9 @@ class InstallLifecycleTests(unittest.TestCase):
                 (wrapper_dir / name).symlink_to(entrypoint)
             lookup = subprocess.run(
                 ["bash", "-c", "command -v apt-get && command -v dpkg"],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
                 env={"PATH": f"{wrapper_dir}{os.pathsep}{os.defpath}"},
             )
             self.assertEqual(
