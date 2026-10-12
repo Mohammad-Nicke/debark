@@ -7,7 +7,7 @@ _debark_completions() {
 
     current="${COMP_WORDS[COMP_CWORD]}"
     previous="${COMP_WORDS[COMP_CWORD-1]}"
-    commands="install remove list search info files verify scan update upgrade config doctor repo cve repair fix gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about -S -i -R -r -Q -l -Qs -Ss -Qi -s -Si -Ql -L -Qk -V -Fy -Qu"
+    commands="install remove list search info files verify scan update upgrade config doctor repo cve repair fix gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about apt-real apt-get-real apt-cache-real dpkg-real real-apt real-apt-get real-apt-cache real-dpkg -S -i -R -r -Q -l -Qs -Ss -Qi -s -Si -Ql -L -Qk -V -Fy -Qu"
 
     case "$previous" in
         install|-S|-i|info|extract|convert)

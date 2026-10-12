@@ -31,11 +31,17 @@ def _load_project_package() -> None:
 
 _load_project_package()
 
-_apt_tool = Path(sys.argv[0]).name
-if _apt_tool in {"apt", "apt-get", "apt-cache", "dpkg"}:
+_apt_command = Path(sys.argv[0]).name
+_apt_tools = {"apt", "apt-get", "apt-cache", "dpkg"}
+_real_tools = {f"{tool}-real": tool for tool in _apt_tools}
+if _apt_command in _apt_tools:
     _invoked_arguments = sys.argv[1:]
     sys.argv[0] = str(Path(sys.argv[0]).resolve())
-    sys.argv[1:] = ["apt-compat", _apt_tool, *_invoked_arguments]
+    sys.argv[1:] = ["apt-compat", _apt_command, *_invoked_arguments]
+elif _apt_command in _real_tools:
+    _invoked_arguments = sys.argv[1:]
+    sys.argv[0] = str(Path(sys.argv[0]).resolve())
+    sys.argv[1:] = ["real-tool", _real_tools[_apt_command], *_invoked_arguments]
 
 from debark.cli import main  # noqa: E402
 

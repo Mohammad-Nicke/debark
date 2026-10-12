@@ -55,13 +55,14 @@ The sandbox option adds a launcher that uses an already-installed bubblewrap or 
 | License inventory | Best effort from package control metadata and documentation |
 | CVE scan | Experimental opt-in; compares installed Debian versions to Debian Security Tracker data for a selected suite |
 | Debian source definition management | Saved locally; HTTPS only for experimental sync |
-| Signed APT index sync, package updates, and APT-compatible commands | Experimental opt-in; detached Release signature, signed SHA256/size checks, x86_64/amd64 only; `dpkg -i` routes local packages through DebArk and `apt-get install -f` reconciles DebArk inventory |
+| Signed APT index sync and repository installs | Experimental opt-in; detached Release signature, signed SHA256/size checks, x86_64/amd64 only |
+| APT-compatible command aliases | Installed by default system-wide and for the invoking user; supported operations route to DebArk, `*-real` aliases hand off to pacman-managed executables, and PATH limitations apply to absolute paths and restricted services |
 | Search and inspect Debian repository packages | Experimental opt-in; works from synced, unexpired indexes without a network request |
 | Package-manager command shortcuts | Common pacman and dpkg forms for install, remove, list, search, info, files, verify and update checks |
 | Desktop entries and launch wrappers | Implemented; existing destinations are not replaced |
 | MIME, DBus, systemd, udev, cron and Polkit registration | Deferred |
 
-`update` refreshes Arch file-provider data used by dependency checks. `upgrade` can detect newer versions from experimental indexes. Opt-in `apt`, `apt-get`, and `apt-cache` wrappers can install or update DebArk-managed apps from synced indexes; `dpkg -i` installs or replaces a local `.deb` through DebArk, and `apt-get install -f` reconciles DebArk inventory. The wrappers do not emulate every APT command and reject operations outside the supported set. Repository search and info also use only indexes already synced by the user. All APT and CVE features are opt-in beta and may fail.
+`update` refreshes Arch file-provider data used by dependency checks. `upgrade` can detect newer versions from experimental indexes. `apt`, `apt-get`, and `apt-cache` aliases can install or update DebArk-managed apps from synced indexes; `dpkg -i` installs or replaces a local `.deb` through DebArk, and `apt-get install -f` reconciles DebArk inventory. These command aliases are installed by default, but repository sync and install remain beta features and must be enabled. The wrappers do not emulate every APT command and reject operations outside the supported set. Repository search and info also use only indexes already synced by the user. CVE checks are also experimental.
 
 ## Hosted and community capabilities
 

@@ -55,7 +55,6 @@ SYSTEM_ACCESS_COMMANDS = frozenset({
     "install", "remove", "list", "search", "files", "verify", "scan", "update",
     "upgrade", "repo", "cve", "config", "repair", "gc", "log", "stats", "snapshot",
     "rollback", "export", "import", "bulk", "watch", "profile", "plugin", "pin", "fix",
-    "apt-compat",
     "license",
 })
 COMMAND_NAMES = frozenset({
@@ -64,6 +63,7 @@ COMMAND_NAMES = frozenset({
     "log", "stats", "snapshot", "rollback", "extract", "convert", "export",
     "import", "bulk", "watch", "profile", "plugin", "pin", "license", "fix", "help",
     "apt-compat",
+    "real-tool",
     "about",
 })
 COMMAND_SHORTCUTS = {
@@ -75,6 +75,12 @@ COMMAND_SHORTCUTS = {
     "-Ql": ("files",), "-L": ("files",),
     "-Qk": ("verify",), "-V": ("verify",),
     "-Fy": ("update",), "-Qu": ("upgrade",),
+    "real-apt": ("real-tool", "apt"), "reall-apt": ("real-tool", "apt"),
+    "real-apt-get": ("real-tool", "apt-get"),
+    "real-apt-cache": ("real-tool", "apt-cache"),
+    "real-dpkg": ("real-tool", "dpkg"),
+    "apt-real": ("real-tool", "apt"), "apt-get-real": ("real-tool", "apt-get"),
+    "apt-cache-real": ("real-tool", "apt-cache"), "dpkg-real": ("real-tool", "dpkg"),
 }
 
 
@@ -240,7 +246,6 @@ class Config:
         self.auto_yes = False
         self.colors = True
         self.experimental_features = False
-        self.apt_compat_enabled = False
         self.threads = 4
         self._load()
 
@@ -297,9 +302,6 @@ class Config:
         self.auto_yes = config_bool("auto_yes", self.auto_yes)
         self.colors = config_bool("colors", self.colors)
         self.experimental_features = config_bool("experimental_features", self.experimental_features)
-        self.apt_compat_enabled = config_bool(
-            "apt_compat_enabled", getattr(self, "apt_compat_enabled", False)
-        )
         try:
             self.threads = max(1, min(16, int(values.get("threads", self.threads))))
         except (TypeError, ValueError):
@@ -447,7 +449,7 @@ def _trusted_system_program() -> Path | None:
     if Path(sys.argv[0]).name == "__main__.py":
         return None
     candidate = shutil.which(sys.argv[0]) or sys.argv[0]
-    program = Path(os.path.abspath(candidate))
+    program = Path(candidate).resolve()
     package_dir = Path(__file__).resolve().parent
     if (_root_managed_path(program)
             and stat.S_ISREG(program.lstat().st_mode)
@@ -458,9 +460,6 @@ def _trusted_system_program() -> Path | None:
 
 def request_system_access() -> int:
     """Prompt through sudo/doas and restart the trusted installed command."""
-    if not sys.stdin.isatty():
-        raise DebArkError("System mode needs administrator access; run it from a terminal.")
-
     program = _trusted_system_program()
     if program is None:
         raise DebArkError(
@@ -483,7 +482,8 @@ def request_system_access() -> int:
     if helper is None:
         raise DebArkError("System mode requires sudo or doas; neither trusted helper was found.")
 
-    print(f"{UI.color('[*]', '36')} Requesting system access…", file=sys.stderr)
+    print(f"{UI.color('[!]', '33')} This command needs administrator access.", file=sys.stderr)
+    print(f"{UI.color('[*]', '36')} Requesting access through {helper.name}…", file=sys.stderr)
     try:
         result = subprocess.run(
             [str(helper), str(interpreter), "-I", str(program), *sys.argv[1:]],
@@ -3000,7 +3000,6 @@ def _install_upstream_debark(cfg: Config) -> None:
             installer.write_text(installer_text, encoding="utf-8")
             os.chmod(installer, 0o700)
             environment = os.environ.copy()
-            environment["DEBARK_INSTALL_MODE"] = cfg.mode
             environment["DEBARK_SELF_UPDATE"] = "1"
             result = subprocess.run([bash, str(installer)], env=environment, check=False)
         if result.returncode != 0:
@@ -3010,7 +3009,7 @@ def _install_upstream_debark(cfg: Config) -> None:
 
 
 def check_debark_update(cfg: Config) -> None:
-    """Check the current GitHub source and offer a same-mode in-place update."""
+    """Check the current GitHub source and offer a system-wide in-place update."""
     base = "https://raw.githubusercontent.com/Mohammad-Nicke/debark/main"
     try:
         init_source = _read_upstream_file(f"{base}/src/debark/__init__.py", limit=64 * 1024)
@@ -3089,7 +3088,7 @@ def cmd_upgrade(args: argparse.Namespace, cfg: Config) -> None:
 def _running_from_user_install() -> bool:
     """Select per-user state automatically for the per-user installed command."""
     candidate = shutil.which(sys.argv[0]) or sys.argv[0]
-    invoked_path = Path(candidate).expanduser().absolute()
+    invoked_path = Path(candidate).expanduser().resolve()
     return invoked_path == current_user_home() / ".local/bin/debark"
 
 
@@ -3328,11 +3327,15 @@ def cmd_repo(args: argparse.Namespace, cfg: Config) -> None:
         print("Use: debark repo add, remove, list, sync, or install")
 
 def cmd_apt_compat(args: argparse.Namespace, cfg: Config) -> None:
-    if not cfg.apt_compat_enabled:
-        fail("APT-compatible commands are disabled; enable them in the DebArk installer first.")
     from .apt_compat import run
 
     run(args.tool, args.apt_args, cfg)
+
+
+def cmd_real_tool(args: argparse.Namespace, cfg: Config) -> None:
+    from .apt_compat import run_real
+
+    run_real(args.tool, args.apt_args)
 
 def cmd_config(args: argparse.Namespace, cfg: Config) -> None:
     allowed = {"auto_yes", "colors", "threads", "experimental_features"}
@@ -3959,6 +3962,9 @@ Commands:
   plugin list|enable|disable Manage trusted local hook plugins
   pin [PACKAGE VERSION]      Manage package version pins
   license [PACKAGE]          Show declared package licenses
+  apt, apt-get, apt-cache, dpkg  Route supported package commands to DebArk
+  apt-real, apt-get-real, apt-cache-real, dpkg-real  Run the original tool through DebArk
+  debark real-apt             Run the installed original apt command
   config [KEY VALUE]        Show or change configuration
   doctor                    Inspect local prerequisites
   repo add|remove|list|sync|search|info|install  Manage Debian sources (beta search/info/install)
@@ -3967,11 +3973,11 @@ Commands:
   cve --suite SUITE         Check installed packages against Debian advisories (beta)
   log                       Show recent audit events
   stats                     Show installed package statistics
-  help [install|repo]       Show help
+  help [install|repo|apt]   Show help
   about                     Show version and project information
 
 Global options:
-  -u, --user                Use the current user's installation paths
+  -u, --user                Install app files and records in the current user's paths
   -tui, --tui               Start the interactive installer
   --threads N               Parallel copy workers, from 1 through 16
   --no-color                Disable colored output
@@ -3997,6 +4003,13 @@ DebArk does not run Debian maintainer scripts.
 System commands from a trusted installation request access through sudo or doas.
 Shortcuts match common pacman/dpkg habits; they run one DebArk action and do not
 perform Arch system upgrades such as pacman -Syu.
+APT command aliases are installed by default. They translate a supported subset
+to DebArk-managed applications; they are not a full Debian package manager.
+`dpkg -i FILE.deb` installs or replaces through DebArk; `apt-get install -f -y`
+reconciles DebArk's inventory. Repository commands need the beta preview enabled.
+Use apt-real, apt-get-real, apt-cache-real, or dpkg-real to run the original
+executables from /usr/bin through DebArk. Absolute /usr/bin paths bypass PATH
+aliases, and pkexec may use a restricted PATH.
 """
 
 def build_parser() -> argparse.ArgumentParser:
@@ -4014,7 +4027,13 @@ def build_parser() -> argparse.ArgumentParser:
             "  -S/-i install   -R/-r remove   -Q/-l list   -Qs search installed\n"
             "  -Qi/-s info     -Ql/-L files   -Qk/-V verify\n"
             "  -Ss repo search -Si repo info  -Fy update   -Qu upgrade check\n"
-            "These run one DebArk action; combined pacman system-upgrade forms are not supported."
+            "These run one DebArk action; combined pacman system-upgrade forms are not supported.\n\n"
+            "APT command shortcuts are installed by default:\n"
+            "  apt, apt-get, apt-cache, dpkg route supported operations to DebArk.\n"
+            "  apt-real, apt-get-real, apt-cache-real, dpkg-real run the original /usr/bin tools.\n"
+            "Repository operations need the experimental preview. Absolute /usr/bin paths and\n"
+            "restricted pkexec PATH values bypass PATH shortcuts; use /usr/local/bin/apt-get\n"
+            "explicitly from privileged update scripts."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -4022,7 +4041,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--version", action="version",
         version=f"DebArk {VERSION}\nMaintainer: {AUTHOR}\nProject: {REPO}",
     )
-    parser.add_argument("--user", "-u", action="store_true", help="use per-user paths")
+    parser.add_argument(
+        "--user", "-u", action="store_true",
+        help="install app files and records in the current user's paths",
+    )
     parser.add_argument("--no-color", action="store_true", help="disable colors")
     parser.add_argument("--threads", type=int, help="parallel copy workers")
     parser.add_argument("--profile", help="load interactive preferences")
@@ -4074,42 +4096,46 @@ def build_parser() -> argparse.ArgumentParser:
                      help="offer explicit adoption of unregistered legacy candidates")
     fix.add_argument("-y", "--yes", action="store_true",
                      help="confirm adoption prompts")
-    for name, argument in (("info", "deb"), ("search", "query"), ("files", "package"),
-                            ("verify", "package")):
-        child = sub.add_parser(name)
+    for name, argument, help_text in (
+        ("info", "deb", "inspect a package file or installed app"),
+        ("search", "query", "search installed apps"),
+        ("files", "package", "list files managed for an app"),
+        ("verify", "package", "check managed file hashes"),
+    ):
+        child = sub.add_parser(name, help=help_text)
         common(child)
         child.add_argument(argument)
-    config = sub.add_parser("config")
+    config = sub.add_parser("config", help="show or change preferences")
     common(config)
     config.add_argument("key", nargs="?")
     config.add_argument("value", nargs="?")
-    repo = sub.add_parser("repo")
+    repo = sub.add_parser("repo", help="manage Debian repositories")
     common(repo)
     repo_sub = repo.add_subparsers(dest="repo_command")
-    add = repo_sub.add_parser("add")
+    add = repo_sub.add_parser("add", help="register an HTTPS Debian repository")
     common(add)
     add.add_argument("name")
     add.add_argument("url")
     add.add_argument("suite")
     add.add_argument("components", nargs="+")
     add.add_argument("--keyring", help="trusted keyring for experimental APT sync")
-    remove_repo = repo_sub.add_parser("remove")
+    remove_repo = repo_sub.add_parser("remove", help="remove a registered repository")
     common(remove_repo)
     remove_repo.add_argument("name")
-    repo_list = repo_sub.add_parser("list")
+    repo_list = repo_sub.add_parser("list", help="list registered repositories")
     common(repo_list)
-    repo_search = repo_sub.add_parser("search")
+    repo_search = repo_sub.add_parser("search", help="search synchronized package indexes")
     common(repo_search)
     repo_search.add_argument("query")
     repo_search.add_argument("--repo", help="search one registered repository")
-    repo_info = repo_sub.add_parser("info")
+    repo_info = repo_sub.add_parser("info", help="show a package from synchronized indexes")
     common(repo_info)
     repo_info.add_argument("package")
     repo_info.add_argument("--repo", help="inspect one registered repository")
-    repo_sync = repo_sub.add_parser("sync")
+    repo_sync = repo_sub.add_parser("sync", help="download and verify repository indexes")
     common(repo_sync)
     repo_sync.add_argument("name", nargs="?")
-    repo_install = repo_sub.add_parser("install")
+    repo_install = repo_sub.add_parser("install", help="install a package from a repository")
     common(repo_install)
     repo_install.add_argument("name")
     repo_install.add_argument("package")
@@ -4124,13 +4150,24 @@ def build_parser() -> argparse.ArgumentParser:
     sub._choices_actions[:] = [
         action for action in sub._choices_actions if action.dest != "apt-compat"
     ]
+    real_tool = sub.add_parser("real-tool")
+    real_tool.add_argument("tool", choices=("apt", "apt-get", "apt-cache", "dpkg"))
+    real_tool.add_argument("apt_args", nargs=argparse.REMAINDER)
+    sub._choices_actions[:] = [
+        action for action in sub._choices_actions if action.dest != "real-tool"
+    ]
     cve = sub.add_parser("cve", help="check advisories (experimental)")
     common(cve)
     cve.add_argument("--suite", required=True, help="Debian suite, such as bookworm")
-    help_parser = sub.add_parser("help")
+    help_parser = sub.add_parser("help", help="show command help")
     help_parser.add_argument("topic", nargs="?")
-    for name in ("repair", "gc", "log", "stats"):
-        child = sub.add_parser(name)
+    for name, help_text in (
+        ("repair", "restore damaged application files"),
+        ("gc", "clean orphaned DebArk markers"),
+        ("log", "show recent DebArk activity"),
+        ("stats", "show installed package statistics"),
+    ):
+        child = sub.add_parser(name, help=help_text)
         common(child)
         if name == "repair":
             child.add_argument("package")
@@ -4185,21 +4222,23 @@ def build_parser() -> argparse.ArgumentParser:
     profile_cmd = sub.add_parser("profile", help="manage interactive preference profiles")
     common(profile_cmd)
     profile_sub = profile_cmd.add_subparsers(dest="profile_command", required=True)
-    profile_save = profile_sub.add_parser("save")
+    profile_save = profile_sub.add_parser("save", help="save current preferences")
     common(profile_save)
     profile_save.add_argument("name")
-    profile_remove = profile_sub.add_parser("remove")
+    profile_remove = profile_sub.add_parser("remove", help="delete a saved profile")
     common(profile_remove)
     profile_remove.add_argument("name")
-    profile_list = profile_sub.add_parser("list")
+    profile_list = profile_sub.add_parser("list", help="list saved profiles")
     common(profile_list)
     plugin_cmd = sub.add_parser("plugin", help="manage trusted local hook plugins")
     common(plugin_cmd)
     plugin_sub = plugin_cmd.add_subparsers(dest="plugin_command", required=True)
-    plugin_list = plugin_sub.add_parser("list")
+    plugin_list = plugin_sub.add_parser("list", help="list local hook plugins")
     common(plugin_list)
     for action in ("enable", "disable"):
-        child = plugin_sub.add_parser(action)
+        child = plugin_sub.add_parser(
+            action, help=f"{action} a trusted local hook plugin"
+        )
         common(child)
         child.add_argument("name")
     pin = sub.add_parser("pin", help="pin an installed package version")
@@ -4245,7 +4284,7 @@ def main() -> int:
         print(HELP_TEXT)
         return 0
     if args.command == "help":
-        if args.topic not in (None, "install", "repo"):
+        if args.topic not in (None, "install", "repo", "apt"):
             parser.error(f"unknown help topic: {args.topic}")
         print(HELP_TEXT)
         return 0
@@ -4269,11 +4308,20 @@ def main() -> int:
         "plugin": cmd_plugin, "pin": cmd_pin,
         "license": cmd_license,
         "apt-compat": cmd_apt_compat,
+        "real-tool": cmd_real_tool,
     }
     try:
         if cfg.mode == "user" and os.geteuid() == 0 and os.environ.get("SUDO_USER"):
             fail("Run user-mode commands without sudo; use sudo only for system mode.")
         needs_system_access = args.command in SYSTEM_ACCESS_COMMANDS
+        if args.command == "apt-compat":
+            from .apt_compat import needs_system_access as apt_needs_system_access
+
+            needs_system_access = apt_needs_system_access(args.tool, args.apt_args)
+        elif args.command == "real-tool":
+            from .apt_compat import real_needs_system_access
+
+            needs_system_access = real_needs_system_access(args.tool, args.apt_args)
         if args.command == "info":
             needs_system_access = not Path(args.deb).expanduser().is_file()
         if (cfg.mode == "system" and os.geteuid() != 0

@@ -6,7 +6,10 @@
 - Install or update a local Debian package through DebArk when an updater calls `dpkg -i`.
 - Keep the package payload and application records under DebArk management without running Debian maintainer scripts.
 - Register system-mode applications with pacman and recover their records with `debark fix`.
-- Let the installer offer a one-time choice when the signed dependency bundle is older than the recommended age.
+- Keep the 14-day dependency-bundle age advisory while retaining signature, checksum, architecture, and pacman state checks.
+- Install DebArk system-wide and add default APT command aliases for the system and invoking user.
+- Route supported APT and dpkg operations through DebArk, with `*-real` aliases for the original pacman-managed executables.
+- Ask for administrator access through `sudo` or `doas` when a system operation needs it.
 
 ## 0.1.2 — 2026-10-05
 

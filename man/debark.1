@@ -50,14 +50,14 @@ Refresh local dependency metadata and pacman's file-provider database, then chec
 Show newer versions available in already-synced experimental APT indexes, then check for a DebArk update. App versions are not replaced by this command; a DebArk update is offered separately.
 .B upgrade also accepts the pacman-style -Qu shortcut. update accepts -Fy.
 .SH APT COMPATIBILITY
-The installer can optionally add apt, apt-get, apt-cache, and dpkg command aliases. They route supported operations to DebArk-managed applications. Repository operations require the experimental APT preview plus a configured, synced repository. The wrappers support common install, update, upgrade, remove, search, and query operations; dpkg queries are read-only, while dpkg -i routes local .deb packages through DebArk's install and replacement flow. apt-get install -f without package names runs DebArk inventory recovery. They do not implement every APT option or the full Debian dependency solver, and they never execute Debian maintainer scripts. Unsupported commands fail explicitly. Existing system commands remain on disk, but the DebArk aliases may take precedence through PATH.
+The installer adds apt, apt-get, apt-cache, and dpkg command aliases in /usr/local/bin and the invoking user's ~/.local/bin. They route supported operations to DebArk-managed applications. Repository operations require the experimental APT preview plus a configured, synced repository. The wrappers support common install, update, upgrade, remove, search, and query operations; dpkg queries are read-only, while dpkg -i routes local .deb packages through DebArk's install and replacement flow. apt-get install -f without package names runs DebArk inventory recovery. They do not implement every APT option or the full Debian dependency solver, and they never execute Debian maintainer scripts. Unsupported commands fail explicitly. The original pacman-managed commands remain in /usr/bin; use apt-real, apt-get-real, apt-cache-real, or dpkg-real to run those commands through DebArk. PATH aliases cannot intercept absolute paths such as /usr/bin/apt, and pkexec may discard /usr/local/bin from PATH.
 .SH OPTIONS
 .TP
 .BR -u , " --user"
-Use per-user paths. Without this option, system mode is used. A trusted system installation requests access through sudo or doas when needed.
+Install app files and records in the current user's paths. DebArk itself remains installed system-wide. Commands that need system access request it through sudo or doas when needed.
 .TP
 .B --arch-system
-Explicitly require system mode and pacman package registration. It cannot be combined with --user; plain system-mode installs use the same integration.
+Explicitly require system-wide app installation and pacman package registration. It cannot be combined with --user; plain system installs use the same integration.
 .TP
 .BR -y , " --yes"
 Skip DebArk confirmation prompts.
