@@ -5,14 +5,14 @@
 _arguments -C \
   '(-h --help)'{-h,--help}'[Show help]' \
   '--version[Show version]' \
-  '(-u --user)'{-u,--user}'[Use user paths]' \
+  '(-u --user)'{-u,--user}'[Install app files and records per-user]' \
   '--arch-system[Require system-wide pacman package registration]' \
   '--adopt[Confirm adoption of older application directories]' \
   '--json[Emit JSON where supported]' \
   '--quiet[Suppress informational output]' \
   '--verbose[Show diagnostic details]' \
   '--threads=[Copy workers]:count:' \
-  '1:command:((install\:Install remove\:Remove list\:List search\:Search info\:Info files\:Files verify\:Verify scan\:Scan update\:Update upgrade\:Upgrade config\:Config doctor\:Doctor repo\:Repository cve\:CVE repair\:Repair fix\:Fix gc\:Cleanup log\:Log stats\:Statistics snapshot\:Snapshot rollback\:Rollback extract\:Extract convert\:Convert export\:Export import\:Import bulk\:Bulk watch\:Watch profile\:Profile plugin\:Plugins pin\:Pin license\:Licenses help\:Help about\:About -S\:Install -i\:Install -R\:Remove -r\:Remove -Q\:List -l\:List -Qs\:Search -Ss\:Repo-search -Qi\:Info -s\:Info -Si\:Repo-info -Ql\:Files -L\:Files -Qk\:Verify -V\:Verify -Fy\:Update -Qu\:Upgrade))' \
+  '1:command:((install\:Install remove\:Remove list\:List search\:Search info\:Info files\:Files verify\:Verify scan\:Scan update\:Update upgrade\:Upgrade config\:Config doctor\:Doctor repo\:Repository cve\:CVE repair\:Repair fix\:Fix gc\:Cleanup log\:Log stats\:Statistics snapshot\:Snapshot rollback\:Rollback extract\:Extract convert\:Convert export\:Export import\:Import bulk\:Bulk watch\:Watch profile\:Profile plugin\:Plugins pin\:Pin license\:Licenses help\:Help about\:About apt-real\:Original apt-get-real\:Original apt-get apt-cache-real\:Original apt-cache dpkg-real\:Original dpkg real-apt\:Original real-apt-get\:Original real-apt-cache\:Original real-dpkg\:Original -S\:Install -i\:Install -R\:Remove -r\:Remove -Q\:List -l\:List -Qs\:Search -Ss\:Repo-search -Qi\:Info -s\:Info -Si\:Repo-info -Ql\:Files -L\:Files -Qk\:Verify -V\:Verify -Fy\:Update -Qu\:Upgrade))' \
   '*::argument:->args'
 
 case "$words[2]" in

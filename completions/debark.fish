@@ -1,6 +1,6 @@
 # DebArk Fish completion · Mr.Nick (@Mohammad-Nicke)
 # https://github.com/Mohammad-Nicke/debark
-set -l commands install remove list search info files verify scan update upgrade config doctor repo cve repair fix gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about -S -i -R -r -Q -l -Qs -Ss -Qi -s -Si -Ql -L -Qk -V -Fy -Qu
+set -l commands install remove list search info files verify scan update upgrade config doctor repo cve repair fix gc log stats snapshot rollback extract convert export import bulk watch profile plugin pin license help about apt-real apt-get-real apt-cache-real dpkg-real real-apt real-apt-get real-apt-cache real-dpkg -S -i -R -r -Q -l -Qs -Ss -Qi -s -Si -Ql -L -Qk -V -Fy -Qu
 complete -c debark -f -n '__fish_use_subcommand' -a "$commands"
 complete -c debark -s S -d 'Install a Debian package (pacman-style)'
 complete -c debark -s i -d 'Install a Debian package (dpkg-style)'
@@ -11,7 +11,7 @@ complete -c debark -s l -d 'List installed DebArk packages (dpkg-style)'
 complete -c debark -s s -d 'Show installed package details (dpkg-style)'
 complete -c debark -s L -d 'List managed files (dpkg-style)'
 complete -c debark -s V -d 'Verify managed package files'
-complete -c debark -s u -l user -d 'Use per-user paths'
+complete -c debark -s u -l user -d 'Install app files and records per-user'
 complete -c debark -s y -l yes -d 'Skip confirmation prompts'
 complete -c debark -l dry-run -d 'Preview without installing'
 complete -c debark -l no-deps -d 'Skip dependency installation'

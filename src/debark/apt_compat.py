@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,66 @@ _DPKG_ACTIONS = {
     "-L": "listfiles", "--listfiles": "listfiles",
     "--print-architecture": "architecture",
 }
+_REAL_BINARIES = {tool: Path("/usr/bin") / tool for tool in _ACTIONS}
+_APT_COMPAT_MUTATIONS = {"update", "install", "reinstall", "remove", "purge", "upgrade"}
+_APT_REAL_MUTATIONS = _APT_COMPAT_MUTATIONS | {
+    "full-upgrade", "dist-upgrade", "autoremove", "autoclean", "clean",
+}
+_DPKG_COMPAT_MUTATIONS = {"-i", "--install"}
+_DPKG_REAL_MUTATIONS = {
+    "-i", "--install", "--unpack", "--configure", "-r", "--remove",
+    "-P", "--purge", "--triggers-only", "--add-architecture",
+    "--remove-architecture", "--set-selections",
+}
+
+
+def _apt_action(tokens: list[str]) -> str:
+    options_with_values = {"-o", "--option", "-c", "--config-file", "-t", "--target-release"}
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            index += 1
+            continue
+        if token in options_with_values:
+            index += 2
+            continue
+        if token in _SAFE_OPTIONS or token.startswith("-"):
+            index += 1
+            continue
+        return token
+    return ""
+
+
+def needs_system_access(tool: str, tokens: list[str]) -> bool:
+    if tool in {"apt", "apt-get"}:
+        return _apt_action(tokens) in _APT_COMPAT_MUTATIONS
+    if tool == "dpkg":
+        return bool(tokens and tokens[0] in _DPKG_COMPAT_MUTATIONS)
+    return False
+
+
+def real_needs_system_access(tool: str, tokens: list[str]) -> bool:
+    if tool in {"apt", "apt-get"}:
+        return _apt_action(tokens) in _APT_REAL_MUTATIONS
+    if tool == "dpkg":
+        return any(token in _DPKG_REAL_MUTATIONS for token in tokens)
+    return False
+
+
+def run_real(tool: str, tokens: list[str]) -> None:
+    from . import engine
+
+    binary = _REAL_BINARIES.get(tool)
+    if binary is None or not binary.is_file() or not os.access(binary, os.X_OK):
+        engine.fail(f"The original {tool} executable is not available at {binary}.")
+    inherited_path = os.environ.get("PATH", "")
+    path_entries = ["/usr/bin", "/bin", *inherited_path.split(os.pathsep)]
+    os.environ["PATH"] = os.pathsep.join(dict.fromkeys(path_entries))
+    try:
+        os.execv(str(binary), [str(binary), *tokens])
+    except OSError as exc:
+        engine.fail(f"Could not start the original {tool} command: {exc}.")
 
 
 def _parse_dpkg(tokens: list[str], engine: Any) -> Invocation:

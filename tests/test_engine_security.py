@@ -228,6 +228,31 @@ class PackageAndDependencyTests(unittest.TestCase):
 
 
 class InstallLifecycleTests(unittest.TestCase):
+    def test_cli_help_covers_default_apt_shortcuts_and_original_tools(self) -> None:
+        help_text = engine.build_parser().format_help()
+        for term in ("search", "config", "apt-get", "apt-real", "dpkg-real", "/usr/local/bin"):
+            with self.subTest(term=term):
+                self.assertIn(term, help_text)
+
+    def test_user_shortcut_to_system_debark_stays_in_system_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            system_command = root / "usr/local/bin/debark"
+            user_command = root / "home/test/.local/bin/debark"
+            system_command.parent.mkdir(parents=True)
+            user_command.parent.mkdir(parents=True)
+            system_command.write_text("system entry point\n", encoding="utf-8")
+            system_command.chmod(0o755)
+            user_command.symlink_to(system_command)
+            with (
+                patch.object(engine, "current_user_home", return_value=user_command.parents[2]),
+                patch.object(engine.shutil, "which", return_value=str(user_command)),
+                patch.object(engine.sys, "argv", [str(user_command)]),
+            ):
+                self.assertFalse(engine._running_from_user_install())
+                with patch.object(engine, "_root_managed_path", return_value=True):
+                    self.assertEqual(engine._trusted_system_program(), system_command)
+
     def make_deb(
         self,
         root: Path,
@@ -355,7 +380,6 @@ class InstallLifecycleTests(unittest.TestCase):
             config.auto_yes = False
             config.colors = False
             config.threads = 1
-            config.apt_compat_enabled = True
 
             wrapper_dir = root / "bin"
             wrapper_dir.mkdir()
@@ -402,12 +426,60 @@ class InstallLifecycleTests(unittest.TestCase):
                 apt_compat._parse("apt-get", ["-f", "install", "-y"], engine).fix_broken
             )
 
-    def test_apt_compat_dispatch_requires_installer_opt_in(self) -> None:
-        config = object.__new__(engine.Config)
-        config.apt_compat_enabled = False
-        args = type("Args", (), {})()
-        with self.assertRaises(engine.DebArkError):
-            engine.cmd_apt_compat(args, config)
+    def test_apt_compat_requests_root_only_for_system_changes(self) -> None:
+        self.assertFalse(apt_compat.needs_system_access("apt", ["--help"]))
+        self.assertFalse(apt_compat.needs_system_access("apt", ["list", "--installed"]))
+        self.assertFalse(apt_compat.needs_system_access("apt", ["list", "install"]))
+        self.assertFalse(apt_compat.needs_system_access("apt-cache", ["search", "demo"]))
+        self.assertTrue(apt_compat.needs_system_access("apt-get", ["update"]))
+        self.assertTrue(apt_compat.needs_system_access("apt-get", ["install", "-f", "-y"]))
+        self.assertTrue(apt_compat.needs_system_access("dpkg", ["-i", "demo.deb"]))
+        self.assertFalse(apt_compat.needs_system_access("dpkg", ["--unpack", "demo.deb"]))
+
+    def test_real_tool_aliases_are_controlled_and_forward_mutations_to_root(self) -> None:
+        self.assertTrue(apt_compat.real_needs_system_access("apt", ["install", "demo"]))
+        self.assertFalse(apt_compat.real_needs_system_access("apt", ["--version"]))
+        self.assertTrue(apt_compat.real_needs_system_access("dpkg", ["--unpack", "demo.deb"]))
+        with (
+            patch.dict(
+                apt_compat.os.environ, {"PATH": "/home/test/.local/bin:/usr/local/bin:/usr/bin"}
+            ),
+            patch.object(apt_compat.os, "execv") as execv,
+        ):
+            apt_compat.run_real("apt", ["--version"])
+            self.assertEqual(
+                apt_compat.os.environ["PATH"],
+                "/usr/bin:/bin:/home/test/.local/bin:/usr/local/bin",
+            )
+        execv.assert_called_once_with("/usr/bin/apt", ["/usr/bin/apt", "--version"])
+        self.assertEqual(
+            engine.normalize_command_shortcuts(["real-apt", "--version"]),
+            ["real-tool", "apt", "--version"],
+        )
+        self.assertEqual(
+            engine.normalize_command_shortcuts(["apt-real", "--version"]),
+            ["real-tool", "apt", "--version"],
+        )
+
+    def test_system_command_requests_privilege_without_interactive_stdin(self) -> None:
+        if not any(Path(path).is_file() for path in ("/usr/bin/sudo", "/usr/bin/doas")):
+            self.skipTest("sudo or doas is required to exercise the privilege request")
+        with tempfile.TemporaryDirectory() as temporary:
+            program = Path(temporary) / "debark"
+            program.write_text("trusted test entry point\n", encoding="utf-8")
+            program.chmod(0o755)
+            result = CompletedProcess(["sudo"], 0)
+            with (
+                patch.object(engine, "_trusted_system_program", return_value=program),
+                patch.object(engine, "_root_managed_path", return_value=True),
+                patch.object(engine.os, "access", return_value=True),
+                patch.object(engine.sys, "stdin", io.StringIO("")),
+                patch.object(engine.sys, "argv", ["debark", "apt-compat", "apt-get", "update"]),
+                patch.object(engine.sys, "stderr", io.StringIO()),
+                patch.object(engine.subprocess, "run", return_value=result) as run,
+            ):
+                self.assertEqual(engine.request_system_access(), 0)
+            self.assertIn("apt-compat", run.call_args.args[0])
 
 
 class ExperimentalFeatureTests(unittest.TestCase):

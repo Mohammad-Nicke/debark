@@ -264,25 +264,7 @@ install_dependencies_from_bundle() {
         bundle_age_hours=$((bundle_age_seconds / 3600))
         printf '\nThe dependency bundle is about %s hours old; the recommended maximum age is %s days.\n' \
             "$bundle_age_hours" "$BUNDLE_MAX_AGE_DAYS" >&2
-        printf 'This limit applies only to the GitHub fallback bundle. Arch is rolling, so older packages may miss fixes or no longer match current system libraries.\n' >&2
-        printf 'Keeping the limit is recommended. Continuing skips only the age check for this installation; signature, checksum, architecture, and pacman package-state checks still apply.\n' >&2
-        case "${DEBARK_ALLOW_STALE_BUNDLE:-0}" in
-            1|true|TRUE|yes|YES)
-                printf 'The age check was disabled explicitly for this installation.\n' >&2
-                ;;
-            0|false|FALSE|no|NO|"")
-                if [ -t 3 ]; then
-                    if ! ask_yes_no "Continue with this older signed dependency bundle for this installation?" "n"; then
-                        die "The old dependency bundle was declined. Update Arch through pacman, then retry the installer."
-                    fi
-                else
-                    die "The dependency bundle is older than ${BUNDLE_MAX_AGE_DAYS} days. Rerun in a terminal to choose, or set DEBARK_ALLOW_STALE_BUNDLE=1 for this installation."
-                fi
-                ;;
-            *)
-                die "DEBARK_ALLOW_STALE_BUNDLE must be set to 1 or 0."
-                ;;
-        esac
+        printf 'The age is advisory only; continuing. Signature, checksum, architecture, and pacman package-state checks remain active.\n' >&2
     fi
 
     mapfile -d '' -t package_files < <(find "$bundle_dir" -maxdepth 1 -type f -name '*.pkg.tar.zst' -print0 | sort -z)
@@ -400,53 +382,24 @@ install -m 644 "$SIGNATURE_PATH" "$SOURCE_DIR/src/debark/data/official.manifest.
 printf '\n%sDebArk · Installer%s\n' "$C_CYAN" "$C_RESET"
 printf '%sMaintainer: %s%s\n' "$C_DIM" "$MAINTAINER" "$C_RESET"
 printf '%sProject: %s%s\n' "$C_DIM" "$REPO_URL" "$C_RESET"
-printf '1) System-wide: /usr/local/bin (requires root, sudo, or doas)\n'
-printf '2) Current user: ~/.local/bin\n'
+printf 'System-wide installation: /usr/local/bin\n'
 
 DETECTED_USER_HOME="$HOME"
-if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-    DETECTED_USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
-    [ -n "$DETECTED_USER_HOME" ] || die "Could not find the invoking user's home directory."
+CALLER_UID="$(id -u)"
+CALLER_GID="$(id -g)"
+if [ "$EUID" -eq 0 ]; then
+    INVOKING_ID="${SUDO_USER:-${DOAS_USER:-${SUDO_UID:-${PKEXEC_UID:-}}}}"
+    if [ -n "$INVOKING_ID" ]; then
+        INVOKING_RECORD="$(getent passwd "$INVOKING_ID")"
+        [ -n "$INVOKING_RECORD" ] || die "Could not find the invoking user's account."
+        DETECTED_USER_HOME="$(cut -d: -f6 <<< "$INVOKING_RECORD")"
+        CALLER_UID="$(cut -d: -f3 <<< "$INVOKING_RECORD")"
+        CALLER_GID="$(cut -d: -f4 <<< "$INVOKING_RECORD")"
+    fi
 fi
 
-SYSTEM_INSTALL_PRESENT="false"
-USER_INSTALL_PRESENT="false"
-if [ -x /usr/local/bin/debark ] && [ -d /usr/local/lib/debark ]; then
-    SYSTEM_INSTALL_PRESENT="true"
-fi
-if [ -x "$DETECTED_USER_HOME/.local/bin/debark" ] && \
-    [ -d "$DETECTED_USER_HOME/.local/lib/debark" ]; then
-    USER_INSTALL_PRESENT="true"
-fi
-
-DEFAULT_MODE="1"
-if [ "$SYSTEM_INSTALL_PRESENT" = "false" ] && [ "$USER_INSTALL_PRESENT" = "true" ]; then
-    DEFAULT_MODE="2"
-elif [ ! -t 3 ] && [ "$EUID" -ne 0 ] && \
-    [ "$SYSTEM_INSTALL_PRESENT" = "false" ]; then
-    DEFAULT_MODE="2"
-fi
-
-case "${DEBARK_INSTALL_MODE:-}" in
-    system) MODE="1" ;;
-    user) MODE="2" ;;
-    "")
-        if [ "${DEBARK_SELF_UPDATE:-0}" = "1" ]; then
-            MODE="$DEFAULT_MODE"
-        else
-            MODE="$(ask_value 'Choose installation mode (1 or 2)' "$DEFAULT_MODE")"
-        fi
-        ;;
-    *) die "Invalid requested installation mode: $DEBARK_INSTALL_MODE" ;;
-esac
-case "$MODE" in
-    1) INSTALL_MODE="system" ;;
-    2) INSTALL_MODE="user" ;;
-    *) die "Choose 1 or 2." ;;
-esac
 if [ "${DEBARK_SELF_UPDATE:-0}" = "1" ]; then
-    printf 'Updating the existing %s installation. Preferences, repository definitions, and DebArk caches will be kept.\n' \
-        "$INSTALL_MODE"
+    printf 'Updating the system-wide installation. Preferences, repository definitions, and DebArk caches will be kept.\n'
 fi
 
 EXPERIMENTAL_FEATURES="false"
@@ -464,92 +417,30 @@ install_required_dependencies "$SOURCE_DIR/dependencies/required-arch.txt"
 command -v python3 >/dev/null 2>&1 || die "The python package was installed, but python3 is still unavailable."
 command -v ar >/dev/null 2>&1 || die "The binutils package was installed, but ar is still unavailable."
 
-INSTALL_UID=""
-INSTALL_GID=""
-if [ "$INSTALL_MODE" = "system" ]; then
-    PRIVILEGE_HELPER=""
-    if [ "$EUID" -ne 0 ]; then
-        if command -v sudo >/dev/null 2>&1; then
-            PRIVILEGE_HELPER="sudo"
-        elif command -v doas >/dev/null 2>&1; then
-            PRIVILEGE_HELPER="doas"
-        else
-            die "System installation requires root, sudo, or doas."
-        fi
-    fi
-    BIN_DIR="/usr/local/bin"
-    LIB_DIR="/usr/local/lib"
-    CFG_DIR="/etc/debark"
-    DATA_DIR="/var/lib/debark"
-    BASH_COMPLETION_DIR="/usr/local/share/bash-completion/completions"
-    ZSH_COMPLETION_DIR="/usr/local/share/zsh/site-functions"
-    FISH_COMPLETION_DIR="/usr/local/share/fish/vendor_completions.d"
-    MAN_DIR="/usr/local/share/man/man1"
-    LICENSE_DIR="/usr/local/share/licenses/debark"
-else
-    USER_HOME="$DETECTED_USER_HOME"
-    if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-        USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
-        [ -n "$USER_HOME" ] || die "Could not find the invoking user's home directory."
-        INSTALL_UID="$(id -u "$SUDO_USER")"
-        INSTALL_GID="$(id -g "$SUDO_USER")"
-    fi
-    BIN_DIR="$USER_HOME/.local/bin"
-    LIB_DIR="$USER_HOME/.local/lib"
-    CFG_DIR="$USER_HOME/.config/debark"
-    DATA_DIR="$USER_HOME/.local/share/debark"
-    BASH_COMPLETION_DIR="$USER_HOME/.local/share/bash-completion/completions"
-    ZSH_COMPLETION_DIR="$USER_HOME/.local/share/zsh/site-functions"
-    FISH_COMPLETION_DIR="$USER_HOME/.local/share/fish/vendor_completions.d"
-    MAN_DIR="$USER_HOME/.local/share/man/man1"
-    LICENSE_DIR="$USER_HOME/.local/share/licenses/debark"
-fi
-
-APT_COMPAT_ENABLED="false"
-APT_COMPAT_DEFAULT="n"
-if [ -f "$CFG_DIR/config.json" ]; then
-    if APT_COMPAT_CURRENT="$(python3 - "$CFG_DIR/config.json" <<'PY'
-import json
-import sys
-
-try:
-    with open(sys.argv[1], encoding="utf-8") as stream:
-        config = json.load(stream)
-except (OSError, ValueError):
-    config = {}
-print("true" if isinstance(config, dict) and config.get("apt_compat_enabled") is True else "false")
-PY
-    )"; then
-        if [ "$APT_COMPAT_CURRENT" = "true" ]; then
-            APT_COMPAT_DEFAULT="y"
-            APT_COMPAT_ENABLED="true"
-        fi
-    fi
-fi
-for apt_tool in apt apt-get apt-cache dpkg; do
-    if [ -L "$BIN_DIR/$apt_tool" ] &&
-        [ "$(readlink -f -- "$BIN_DIR/$apt_tool" 2>/dev/null || true)" = "$BIN_DIR/debark" ]; then
-        APT_COMPAT_DEFAULT="y"
-        APT_COMPAT_ENABLED="true"
-    fi
-done
-if [ "${DEBARK_SELF_UPDATE:-0}" != "1" ] && [ -t 3 ]; then
-    printf '\n%sAPT-compatible commands%s: optional apt, apt-get, apt-cache, and dpkg shortcuts for DebArk-managed applications.\n' \
-        "$C_CYAN" "$C_RESET"
-    printf 'They use DebArk signed APT indexes, never run Debian maintainer scripts, and do not provide general-purpose APT/dpkg behavior.\n'
-    for apt_tool in apt apt-get apt-cache dpkg; do
-        existing_apt_tool="$(command -v "$apt_tool" || true)"
-        if [ -n "$existing_apt_tool" ] && [ "$existing_apt_tool" != "$BIN_DIR/$apt_tool" ]; then
-            printf '  Existing %s command: %s (left in place; the DebArk command may take precedence in PATH).\n' \
-                "$apt_tool" "$existing_apt_tool"
-        fi
-    done
-    if ask_yes_no "Install or keep the DebArk APT-compatible commands?" "$APT_COMPAT_DEFAULT"; then
-        APT_COMPAT_ENABLED="true"
+PRIVILEGE_HELPER=""
+if [ "$EUID" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        PRIVILEGE_HELPER="sudo"
+    elif command -v doas >/dev/null 2>&1; then
+        PRIVILEGE_HELPER="doas"
     else
-        APT_COMPAT_ENABLED="false"
+        die "System installation requires root, sudo, or doas."
     fi
 fi
+BIN_DIR="/usr/local/bin"
+LIB_DIR="/usr/local/lib"
+CFG_DIR="/etc/debark"
+DATA_DIR="/var/lib/debark"
+BASH_COMPLETION_DIR="/usr/local/share/bash-completion/completions"
+ZSH_COMPLETION_DIR="/usr/local/share/zsh/site-functions"
+FISH_COMPLETION_DIR="/usr/local/share/fish/vendor_completions.d"
+MAN_DIR="/usr/local/share/man/man1"
+LICENSE_DIR="/usr/local/share/licenses/debark"
+USER_BIN_DIR="$DETECTED_USER_HOME/.local/bin"
+APT_COMMANDS=(apt apt-get apt-cache dpkg apt-real apt-get-real apt-cache-real dpkg-real)
+for user_path in "$DETECTED_USER_HOME" "$DETECTED_USER_HOME/.local" "$USER_BIN_DIR"; do
+    [ ! -L "$user_path" ] || die "Refusing to install user shortcuts through a symbolic link: $user_path"
+done
 
 AUTO_YES="false"
 COLORS="true"
@@ -568,27 +459,46 @@ if [ -n "$(find "$SOURCE_DIR/src/debark" -type l -print -quit)" ]; then
 fi
 
 run_privileged() {
-    if [ "$INSTALL_MODE" = "system" ] && [ "$EUID" -ne 0 ]; then
+    if [ "$EUID" -ne 0 ]; then
         "$PRIVILEGE_HELPER" "$@"
     else
         "$@"
     fi
 }
 
-if [ "$APT_COMPAT_ENABLED" = "true" ]; then
-    for apt_tool in apt apt-get apt-cache dpkg; do
-        apt_wrapper="$BIN_DIR/$apt_tool"
-        if [ -L "$apt_wrapper" ]; then
-            [ "$(readlink -f -- "$apt_wrapper" 2>/dev/null || true)" = "$BIN_DIR/debark" ] ||
-                die "Refusing to replace an unrelated symbolic link: $apt_wrapper"
-        elif [ -e "$apt_wrapper" ]; then
-            die "Refusing to replace an existing command: $apt_wrapper"
-        fi
-        if pacman -Qo "$apt_wrapper" >/dev/null 2>&1; then
-            die "Refusing to replace a pacman-owned path: $apt_wrapper"
-        fi
-    done
+for apt_tool in "${APT_COMMANDS[@]}"; do
+    apt_wrapper="$BIN_DIR/$apt_tool"
+    if [ -L "$apt_wrapper" ]; then
+        [ "$(readlink -f -- "$apt_wrapper" 2>/dev/null || true)" = "$BIN_DIR/debark" ] ||
+            die "Refusing to replace an unrelated symbolic link: $apt_wrapper"
+    elif [ -e "$apt_wrapper" ]; then
+        die "Refusing to replace an existing command: $apt_wrapper"
+    fi
+    if pacman -Qo "$apt_wrapper" >/dev/null 2>&1; then
+        die "Refusing to replace a pacman-owned path: $apt_wrapper"
+    fi
+done
+
+if [ -e "$USER_BIN_DIR/debark" ] || [ -L "$USER_BIN_DIR/debark" ]; then
+    user_debark_target="$(readlink -f -- "$USER_BIN_DIR/debark" 2>/dev/null || true)"
+    if [ "$user_debark_target" != "$BIN_DIR/debark" ] &&
+        ! { [ -f "$USER_BIN_DIR/debark" ] &&
+            grep -Fq 'github.com/Mohammad-Nicke/debark' "$USER_BIN_DIR/debark"; }; then
+        die "A non-DebArk command already exists at $USER_BIN_DIR/debark; remove or rename it before installing."
+    fi
 fi
+for apt_tool in "${APT_COMMANDS[@]}"; do
+    user_wrapper="$USER_BIN_DIR/$apt_tool"
+    if [ -L "$user_wrapper" ]; then
+        user_wrapper_target="$(readlink -f -- "$user_wrapper" 2>/dev/null || true)"
+        if [ "$user_wrapper_target" != "$BIN_DIR/debark" ] &&
+            [ "$user_wrapper_target" != "$USER_BIN_DIR/debark" ]; then
+            die "Refusing to replace an unrelated symbolic link: $user_wrapper"
+        fi
+    elif [ -e "$user_wrapper" ]; then
+        die "Refusing to replace an existing command: $user_wrapper"
+    fi
+done
 
 for target in "$BIN_DIR/debark" "$LIB_DIR/debark" \
     "$BASH_COMPLETION_DIR/debark" "$ZSH_COMPLETION_DIR/_debark" \
@@ -626,11 +536,9 @@ MODULE_BACKUP="$LIB_DIR/.debark.old.$$"
 run_privileged rm -rf -- "$MODULE_STAGE" "$MODULE_BACKUP"
 run_privileged mkdir -m 755 "$MODULE_STAGE"
 run_privileged cp -a "$SOURCE_DIR/src/debark/." "$MODULE_STAGE/"
-if [ "$INSTALL_MODE" = "system" ]; then
-    run_privileged chown -R 0:0 "$MODULE_STAGE"
-    run_privileged find "$MODULE_STAGE" -type d -exec chmod 755 {} +
-    run_privileged find "$MODULE_STAGE" -type f -exec chmod 644 {} +
-fi
+run_privileged chown -R 0:0 "$MODULE_STAGE"
+run_privileged find "$MODULE_STAGE" -type d -exec chmod 755 {} +
+run_privileged find "$MODULE_STAGE" -type f -exec chmod 644 {} +
 if [ -d "$LIB_DIR/debark" ] || [ -L "$LIB_DIR/debark" ]; then
     run_privileged mv -- "$LIB_DIR/debark" "$MODULE_BACKUP"
 fi
@@ -649,16 +557,23 @@ if ! run_privileged mv -fT -- "$ENTRYPOINT_STAGE" "$BIN_DIR/debark"; then
     run_privileged rm -f -- "$ENTRYPOINT_STAGE"
     die "Could not replace the DebArk command."
 fi
-for apt_tool in apt apt-get apt-cache dpkg; do
+for apt_tool in "${APT_COMMANDS[@]}"; do
     apt_wrapper="$BIN_DIR/$apt_tool"
-    if [ "$APT_COMPAT_ENABLED" = "true" ]; then
-        if [ ! -L "$apt_wrapper" ]; then
-            run_privileged ln -s -- "$BIN_DIR/debark" "$apt_wrapper"
-        fi
-    elif [ -L "$apt_wrapper" ] &&
-        [ "$(readlink -f -- "$apt_wrapper" 2>/dev/null || true)" = "$BIN_DIR/debark" ]; then
-        run_privileged rm -- "$apt_wrapper"
+    if [ ! -L "$apt_wrapper" ]; then
+        run_privileged ln -s -- "$BIN_DIR/debark" "$apt_wrapper"
     fi
+done
+run_privileged install -d -m 755 -o "$CALLER_UID" -g "$CALLER_GID" "$USER_BIN_DIR"
+if [ -e "$USER_BIN_DIR/debark" ] || [ -L "$USER_BIN_DIR/debark" ]; then
+    run_privileged rm -f -- "$USER_BIN_DIR/debark"
+fi
+run_privileged ln -s -- "$BIN_DIR/debark" "$USER_BIN_DIR/debark"
+for apt_tool in "${APT_COMMANDS[@]}"; do
+    user_wrapper="$USER_BIN_DIR/$apt_tool"
+    if [ -e "$user_wrapper" ] || [ -L "$user_wrapper" ]; then
+        run_privileged rm -f -- "$user_wrapper"
+    fi
+    run_privileged ln -s -- "$BIN_DIR/debark" "$user_wrapper"
 done
 run_privileged install -Dm 644 "$SOURCE_DIR/completions/debark.bash" \
     "$BASH_COMPLETION_DIR/debark"
@@ -673,11 +588,10 @@ if [ -f "$SOURCE_DIR/LICENSE.fa" ]; then
 fi
 
 CONFIG_TMP="$TMP_DIR/config.json"
-python3 - "$CONFIG_TMP" "$AUTO_YES" "$COLORS" "$THREADS" "$EXPERIMENTAL_FEATURES" \
-    "$APT_COMPAT_ENABLED" <<'PY'
+python3 - "$CONFIG_TMP" "$AUTO_YES" "$COLORS" "$THREADS" "$EXPERIMENTAL_FEATURES" <<'PY'
 import json
 import sys
-path, auto_yes, colors, threads, experimental_features, apt_compat = sys.argv[1:]
+path, auto_yes, colors, threads, experimental_features = sys.argv[1:]
 config = {
     "managed_by": "DebArk",
     "maintainer": "Mr.Nick (@Mohammad-Nicke)",
@@ -686,7 +600,6 @@ config = {
     "colors": colors == "true",
     "threads": int(threads),
     "experimental_features": experimental_features == "true",
-    "apt_compat_enabled": apt_compat == "true",
 }
 with open(path, "w", encoding="utf-8") as stream:
     json.dump(config, stream, indent=2)
@@ -695,9 +608,6 @@ PY
 
 if [ ! -f "$CFG_DIR/config.json" ]; then
     run_privileged install -m 600 "$CONFIG_TMP" "$CFG_DIR/config.json"
-    if [ "$INSTALL_MODE" = "user" ] && [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-        run_privileged chown "$INSTALL_UID:$INSTALL_GID" "$CFG_DIR/config.json"
-    fi
 else
     printf 'Keeping existing preferences at %s/config.json\n' "$CFG_DIR"
 fi
@@ -732,78 +642,16 @@ except Exception:
         pass
     raise
 PY
-    if [ "$INSTALL_MODE" = "system" ] || { [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; }; then
-        run_privileged python3 "$CONFIG_FLAG_HELPER" "$CFG_DIR/config.json" "$EXPERIMENTAL_FEATURES"
-    else
-        python3 "$CONFIG_FLAG_HELPER" "$CFG_DIR/config.json" "$EXPERIMENTAL_FEATURES"
-    fi
-    if [ "$INSTALL_MODE" = "user" ] && [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-        run_privileged chown "$INSTALL_UID:$INSTALL_GID" "$CFG_DIR/config.json"
-    fi
-fi
-
-APT_COMPAT_CONFIG_HELPER="$TMP_DIR/set-apt-compat-config.py"
-cat > "$APT_COMPAT_CONFIG_HELPER" <<'PY'
-import json
-import os
-import sys
-import tempfile
-
-path, enabled = sys.argv[1:]
-with open(path, encoding="utf-8") as stream:
-    config = json.load(stream)
-if not isinstance(config, dict):
-    raise SystemExit("DebArk config must contain a JSON object")
-config["apt_compat_enabled"] = enabled == "true"
-fd, temporary = tempfile.mkstemp(prefix=".debark-config-", dir=os.path.dirname(path))
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        os.fchmod(stream.fileno(), 0o600)
-        json.dump(config, stream, indent=2, ensure_ascii=False)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-except Exception:
-    try:
-        os.unlink(temporary)
-    except FileNotFoundError:
-        pass
-    raise
-PY
-if [ "$INSTALL_MODE" = "system" ]; then
-    run_privileged python3 "$APT_COMPAT_CONFIG_HELPER" "$CFG_DIR/config.json" "$APT_COMPAT_ENABLED"
-else
-    python3 "$APT_COMPAT_CONFIG_HELPER" "$CFG_DIR/config.json" "$APT_COMPAT_ENABLED"
-fi
-
-if [ "$INSTALL_MODE" = "user" ] && [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-    run_privileged chown -R "$INSTALL_UID:$INSTALL_GID" \
-        "$BIN_DIR/debark" "$LIB_DIR/debark" \
-        "$BASH_COMPLETION_DIR/debark" "$ZSH_COMPLETION_DIR/_debark" \
-        "$FISH_COMPLETION_DIR/debark.fish" "$MAN_DIR/debark.1"
-    for directory in "$USER_HOME/.local" "$USER_HOME/.local/bin" "$USER_HOME/.local/lib" \
-        "$USER_HOME/.local/share" "$USER_HOME/.config" "$CFG_DIR" \
-        "$(dirname "$BASH_COMPLETION_DIR")" "$BASH_COMPLETION_DIR" \
-        "$(dirname "$ZSH_COMPLETION_DIR")" "$ZSH_COMPLETION_DIR" \
-        "$(dirname "$FISH_COMPLETION_DIR")" "$FISH_COMPLETION_DIR" \
-        "$(dirname "$MAN_DIR")" "$MAN_DIR" "$DATA_DIR" \
-        "$DATA_DIR/cache" "$DATA_DIR/pkgs"; do
-        if [ -d "$directory" ]; then
-            run_privileged chown "$INSTALL_UID:$INSTALL_GID" "$directory"
-        fi
-    done
+    run_privileged python3 "$CONFIG_FLAG_HELPER" "$CFG_DIR/config.json" "$EXPERIMENTAL_FEATURES"
 fi
 
 printf '\n%sDebArk installed:%s %s/debark\n' "$C_GREEN" "$C_RESET" "$BIN_DIR"
 printf 'Configuration: %s/config.json\n' "$CFG_DIR"
 printf 'Shell completions and man page installed.\n'
-case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *)
-        if [ "$INSTALL_MODE" = "user" ]; then
-            printf 'Add %s to your PATH to run debark from a new shell.\n' "$BIN_DIR"
-        fi
-        ;;
-esac
+printf 'System and user command shortcuts installed.\n'
+printf 'Running DebArk compatibility repair...\n'
+run_privileged "$BIN_DIR/debark" fix
+hash -r
+printf '\nRefresh this terminal command cache with hash -r (Bash) or rehash (Zsh), if an older command is still cached.\n'
+printf 'Use apt-real, apt-get-real, apt-cache-real, or dpkg-real for the installed original tools.\n'
 printf 'Try: debark help\n'

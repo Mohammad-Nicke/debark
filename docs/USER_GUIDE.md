@@ -24,18 +24,17 @@ bash -c "$(wget -qO- https://raw.githubusercontent.com/Mohammad-Nicke/debark/mai
 
 The installer fetches the current source and dependency manifest from this repository. It first asks pacman to install missing requirements from configured Arch repositories. If that fails, the current x86_64 signed dependency bundle from GitHub Releases may be used. This fallback still needs GitHub access, a working Arch keyring, and a compatible package state; it is not an offline installer.
 
-The dependency bundle is refreshed weekly. Since Arch is a rolling release, the installer recommends a bundle no older than 14 days. If the fallback bundle is older, an interactive install explains the risk and asks whether to continue for this installation; keeping the age limit is recommended. For a non-interactive install, set DEBARK_ALLOW_STALE_BUNDLE=1 to accept an older bundle. This bypasses only the age check; signature, checksum, architecture, and pacman package-state checks remain active. The 14-day limit applies to this fallback bundle, not to an installed DebArk copy.
+The dependency bundle is refreshed weekly. Since Arch is a rolling release, 14 days is a freshness recommendation only. An older signed fallback bundle no longer stops installation; signature, checksum, architecture, and pacman package-state checks remain active. DebArk still refuses a bundle that would downgrade a package already installed on the system.
 
-The installer supports two layouts:
+DebArk itself is always installed system-wide:
 
-| Mode | Command | App files | Settings | DebArk data and cache |
-| --- | --- | --- | --- | --- |
-| System-wide | `/usr/local/bin/debark` | `/opt` | `/etc/debark` | `/var/lib/debark` |
-| Per-user | `~/.local/bin/debark` | `~/.local/opt` | `~/.config/debark` | `~/.local/share/debark` |
+| DebArk files | App files | Settings | DebArk data and cache |
+| --- | --- | --- | --- |
+| `/usr/local/bin` and `/usr/local/lib` | `/opt` for system apps, `~/.local/opt` for per-user apps | `/etc/debark` | `/var/lib/debark` |
 
-System-wide installation needs administrator access when it writes system paths or installs Arch dependencies. The trusted installed command requests access through `sudo` or `doas` when needed. A per-user command selects its matching per-user data automatically; `--user` can also be added explicitly.
+The installer requests administrator access through `sudo` or `doas` when it writes system paths or installs Arch dependencies. DebArk commands that need system access request it through the same helper. App files can still be installed per-user with `debark install --user`; that option does not install a per-user copy of DebArk.
 
-Re-running the installer replaces DebArk's program files in the selected mode. It keeps DebArk's configuration, registered Debian repositories, installed-app records, snapshots, and DebArk cache. `debark update` and `debark upgrade` check the program version after their usual work. When a newer DebArk version is found, the command shows the matching changelog notes and asks before installing it. If no newer version is available, the self-update check is silent.
+Re-running the installer replaces DebArk's system-wide program files. It keeps DebArk's configuration, registered Debian repositories, installed-app records, snapshots, and DebArk cache. `debark update` and `debark upgrade` check the program version after their usual work. When a newer DebArk version is found, the command shows the matching changelog notes and asks before installing it. If no newer version is available, the self-update check is silent.
 
 ## Install a Debian application
 
@@ -117,7 +116,7 @@ The word “update” can refer to three different things:
 - `debark update` refreshes DebArk's local dependency map and, in system mode, pacman's file-provider data. It then checks for a newer DebArk program version and asks before replacing DebArk itself.
 - `debark upgrade` lists newer versions for apps installed through the optional, already-synced APT integration. It does not replace those apps. It also checks DebArk's own version and can offer to update DebArk.
 
-The DebArk self-update uses the installation mode already in use. It replaces DebArk's program files and keeps its settings, repository list, package records, snapshots, and DebArk cache. It does not upgrade Arch packages or replace installed Debian applications.
+The DebArk self-update replaces its system-wide program files and keeps its settings, repository list, package records, snapshots, and DebArk cache. It does not upgrade Arch packages or replace installed Debian applications.
 
 ## Dependencies and desktop integration
 
@@ -137,7 +136,7 @@ Run `debark fix` after upgrading if package records are missing or use an older 
 
 ## Optional Debian repositories and security checks
 
-The APT integration is an opt-in beta feature. Enable it in the installer or with:
+DebArk always installs `apt`, `apt-get`, `apt-cache`, and `dpkg` command shortcuts. Repository integration remains an opt-in beta feature. Enable that preview with:
 
 ```sh
 debark config experimental_features true
@@ -154,7 +153,7 @@ debark repo info PACKAGE --repo debian
 debark repo install debian PACKAGE
 ```
 
-The beta path accepts HTTPS repositories, verifies signed Release metadata with the supplied keyring, checks index metadata and downloaded package hashes, and supports amd64 indexes. DebArk does not import keys or choose which publishers to trust. Its APT-compatible wrappers are a separate installer choice and require this preview to be enabled.
+The beta path accepts HTTPS repositories, verifies signed Release metadata with the supplied keyring, checks index metadata and downloaded package hashes, and supports amd64 indexes. DebArk does not import keys or choose which publishers to trust. Local package installation through `dpkg -i` and `apt-get install -f` inventory recovery do not need the repository preview.
 
 When enabled, the wrappers support common requests for DebArk-managed applications:
 
@@ -173,7 +172,15 @@ dpkg --listfiles PACKAGE
 dpkg -i /path/to/package.deb
 ```
 
-Package versions from repositories come from the verified indexes you have synced. APT package dependencies are handled through DebArk's Debian-to-Arch mapping; DebArk does not implement the full APT dependency solver. `apt-get install -f -y` without package names asks DebArk to reconcile its installed-app inventory, then returns so an updater can install a local package. `dpkg -i FILE.deb` sends each local package through DebArk's install or replacement flow, including dependency checks and the normal DebArk records. It does not register the package in dpkg's database. Batch changes run as separate app transactions, so an error partway through can leave earlier successful operations in place. The wrappers do not run Debian maintainer scripts. Operations that could change or remove unrelated system packages, including `full-upgrade`, `dist-upgrade`, `autoremove`, and direct dpkg database changes, are rejected. Existing system commands are left untouched, though the opt-in wrapper in `/usr/local/bin` or `~/.local/bin` may be found first through PATH. A privileged updater must have `/usr/local/bin` before system command directories in its sanitized PATH for these aliases to be selected.
+Package versions from repositories come from the verified indexes you have synced. APT package dependencies are handled through DebArk's Debian-to-Arch mapping; DebArk does not implement the full APT dependency solver. `apt-get install -f -y` without package names asks DebArk to reconcile its installed-app inventory, then returns so an updater can install a local package. `dpkg -i FILE.deb` sends each local package through DebArk's install or replacement flow, including dependency checks and the normal DebArk records. It does not register the package in dpkg's database. Batch changes run as separate app transactions, so an error partway through can leave earlier successful operations in place. The wrappers do not run Debian maintainer scripts. Operations that could change or remove unrelated system packages, including `full-upgrade`, `dist-upgrade`, `autoremove`, and direct dpkg database changes, are rejected. The original Arch commands remain package-managed and are not overwritten; use `apt-real`, `apt-get-real`, `apt-cache-real`, or `dpkg-real` through DebArk to run them. Normal PATH lookups resolve the shortcuts because the installer places them in `/usr/local/bin` and the invoking user's `~/.local/bin`.
+
+PATH shortcuts cannot capture an explicit path such as `/usr/bin/apt`, a shell with a cached command path, or a privileged service that discards `/usr/local/bin` from its PATH. Refresh a shell with `hash -r` in Bash or `rehash` in Zsh. For a service using `pkexec`, configure it to invoke `/usr/local/bin/apt-get` explicitly; DebArk cannot replace pacman-owned files in `/usr/bin` while still allowing pacman to update the original tools.
+
+When a caller uses `bash -c`, the command and its arguments must be one quoted string. For example, this form selects the DebArk wrapper after `pkexec` starts the shell:
+
+```sh
+pkexec --disable-internal-agent /bin/bash -c '/usr/local/bin/apt-get install -f -y'
+```
 
 The dpkg wrapper supports package listing, status, file listing, architecture queries, and local installation with `-i` or `--install`. Other dpkg mutations such as `--unpack` or `--configure` are rejected. The wrappers cover common package operations; they do not reproduce every APT option or output format. Unknown commands and options produce an error instead of being passed to the original APT binary.
 
@@ -196,7 +203,7 @@ Other tools include `debark extract FILE.deb` to inspect/extract package payload
 
 ### The installer cannot find a required tool
 
-The online installer needs `curl` or `wget` to download itself. It then uses pacman for the required Arch packages and may need administrator access. If the configured mirrors are unavailable, check them and the system keyring, then retry. The GitHub dependency bundle is a fallback for x86_64. If it is over 14 days old, the installer asks before continuing; for non-interactive use, DEBARK_ALLOW_STALE_BUNDLE=1 accepts the age. Signature, checksum, architecture, and pacman package-state checks still apply.
+The online installer needs `curl` or `wget` to download itself. It then uses pacman for the required Arch packages and may need administrator access. If the configured mirrors are unavailable, check them and the system keyring, then retry. The GitHub dependency bundle is a fallback for x86_64. If it is over 14 days old, the installer warns and continues; signature, checksum, architecture, and pacman package-state checks still apply.
 
 ### An app does not launch
 
@@ -212,7 +219,7 @@ Try the application without `--sandbox` only if you trust its source and underst
 
 ### Where are my settings and data?
 
-System mode uses `/etc/debark` and `/var/lib/debark`; per-user mode uses `~/.config/debark` and `~/.local/share/debark`. The latter data directory contains DebArk's cache and package records. Re-running the installer or a DebArk self-update does not remove these directories.
+The system installation uses `/etc/debark` and `/var/lib/debark`; old per-user settings and records remain under `~/.config/debark` and `~/.local/share/debark`. Re-running the installer does not remove existing data directories.
 
 ## More help
 
